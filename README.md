@@ -29,7 +29,7 @@ node pack.js
 # 输出在 dist/麻衣桌宠-win32-x64/
 ```
 
-> 直接下载运行：见右侧 Releases 的「麻衣桌宠-绿色便携版.zip」。
+> 直接下载运行：见右侧 Releases 的 **`mai-pet-portable.zip`**（绿色便携版，解压后双击 `麻衣桌宠.exe` 即可）。
 
 ## 配置 AI（可选）
 
