@@ -1,0 +1,171 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+}
+
+.hidden { display: none !important; }
+
+#pet {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+#character-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding-right: 8px;
+  padding-bottom: 4px;
+}
+
+#char {
+  display: block;
+  width: 100%;
+  height: 100%;
+  -webkit-user-drag: none;
+}
+
+/* 用户自带的形象图片（放在「形象」文件夹里） */
+#user-image {
+  display: none;
+  max-width: 190px;
+  max-height: 260px;
+  object-fit: contain;
+  -webkit-user-drag: none;
+  animation: breathe 3.2s ease-in-out infinite;
+  transform-origin: 50% 100%;
+  transition: max-width 0.2s ease, max-height 0.2s ease;
+}
+#user-image.size-s { max-width: 140px; max-height: 190px; }
+#user-image.size-l { max-width: 250px; max-height: 340px; }
+
+/* 呼吸起伏 */
+.breathing {
+  animation: breathe 3.2s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1, 1); }
+  50% { transform: scale(1.012, 0.988); }
+}
+
+/* 被拎起时轻微晃动 */
+#pet.dragged #character-layer {
+  animation: wobble 0.18s linear infinite;
+}
+@keyframes wobble {
+  0% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+  100% { transform: rotate(-3deg); }
+}
+
+/* 点击跳一下 */
+#pet.hop #character-layer {
+  animation: hop 0.5s ease;
+}
+@keyframes hop {
+  0% { transform: translateY(0); }
+  35% { transform: translateY(-16px); }
+  70% { transform: translateY(2px); }
+  100% { transform: translateY(0); }
+}
+
+/* 眨眼 */
+.blink { }
+
+/* ---------- 气泡（放左侧专用区，不挡人物） ---------- */
+#bubble {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  transform: translateY(-50%) translateX(-4px) scale(0.9);
+  max-width: 140px;
+  background: rgba(255, 255, 255, 0.97);
+  color: #4a3b3b;
+  border: 1.5px solid #f3d7d7;
+  border-radius: 14px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s ease;
+  z-index: 20;
+}
+#bubble::after {
+  content: '';
+  position: absolute;
+  right: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  border-top: 8px solid transparent;
+  border-bottom: 8px solid transparent;
+  border-left: 8px solid #ffffff;
+}
+#bubble.visible {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0) scale(1);
+}
+
+/* ---------- 聊天输入框 ---------- */
+#chatbar {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  z-index: 25;
+}
+#chat-input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1.5px solid #ead8d8;
+  border-radius: 12px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  background: rgba(255, 255, 255, 0.97);
+  color: #4a3b3b;
+  outline: none;
+}
+#chat-input:focus { border-color: #d8a8b8; }
+
+/* ---------- 右键菜单 ---------- */
+#menu {
+  position: absolute;
+  z-index: 30;
+  min-width: 150px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #ead8d8;
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+}
+.menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 7px 12px;
+  font-size: 13px;
+  color: #4a3b3b;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menu-item:hover { background: #fbeeee; }
+.menu-item.checked { color: #c24a5a; font-weight: 600; }
+.menu-item.checked::before { content: '✓ '; }
+.menu-sep { height: 1px; background: #eedede; margin: 4px 6px; }

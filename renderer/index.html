@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' file: data: blob:;" />
+  <title>麻衣桌宠</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="pet">
+    <div id="bubble"><span id="bubble-text"></span></div>
+
+    <div id="character-layer">
+      <svg id="char" viewBox="0 0 320 400" xmlns="http://www.w3.org/2000/svg">
+      <g class="breathing">
+
+        <!-- ===== 身体：白色圆润小团子 ===== -->
+        <ellipse cx="160" cy="252" rx="97" ry="102" fill="#fffdf7" stroke="#cfc8ba" stroke-width="3"/>
+        <!-- 底部柔光阴影 -->
+        <path fill="#f0eadd" d="M63 322 C63 346 106 354 160 354 C214 354 257 346 257 322 C257 348 214 358 160 358 C106 358 63 348 63 322 Z"/>
+        <!-- 小脚 -->
+        <ellipse cx="130" cy="354" rx="21" ry="11" fill="#fffdf7" stroke="#cfc8ba" stroke-width="2.5"/>
+        <ellipse cx="190" cy="354" rx="21" ry="11" fill="#fffdf7" stroke="#cfc8ba" stroke-width="2.5"/>
+
+        <!-- ===== 鬓发（两侧长发，深灰色） ===== -->
+        <g id="hairBack">
+          <path fill="#3d3b47" stroke="#332f3c" stroke-width="2"
+                d="M100 172 C86 216 82 268 92 312 C96 330 116 332 122 316 C128 290 126 240 122 196 C121 184 110 170 100 172 Z"/>
+          <path fill="#3d3b47" stroke="#332f3c" stroke-width="2"
+                d="M220 172 C234 216 238 268 228 312 C224 330 204 332 198 316 C192 290 194 240 198 196 C199 184 210 170 220 172 Z"/>
+        </g>
+
+        <!-- ===== 服装配件：校服（红领带） / 兔女郎（红蝴蝶结） ===== -->
+        <g id="outfitSchool">
+          <path d="M156 296 L164 296 L162 324 L158 324 Z" fill="#c8404f" stroke="#a23240" stroke-width="1.5"/>
+          <circle cx="160" cy="295" r="5" fill="#c8404f" stroke="#a23240" stroke-width="1.5"/>
+        </g>
+        <g id="outfitBunny" class="hidden">
+          <path d="M160 300 L138 288 L142 312 Z" fill="#d8404e" stroke="#a23240" stroke-width="1.5"/>
+          <path d="M160 300 L182 288 L178 312 Z" fill="#d8404e" stroke="#a23240" stroke-width="1.5"/>
+          <circle cx="160" cy="300" r="5" fill="#bd3543"/>
+        </g>
+
+        <!-- ===== 脸（特征直接画在团子上） ===== -->
+        <g id="head">
+          <!-- 眉毛 -->
+          <g id="browNormal">
+            <path d="M110 206 Q126 199 142 206" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+            <path d="M178 206 Q194 199 210 206" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="browWorried" class="hidden">
+            <path d="M108 212 Q124 207 138 203" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+            <path d="M182 203 Q196 207 212 212" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="browAngry" class="hidden">
+            <path d="M108 201 Q124 207 138 213" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+            <path d="M182 213 Q196 207 212 201" stroke="#3f3b49" stroke-width="4.5" fill="none" stroke-linecap="round"/>
+          </g>
+
+          <!-- 眼睛：紫灰色大圆眼 -->
+          <g id="eyesNormal">
+            <circle cx="126" cy="234" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <circle cx="129" cy="237" r="9" fill="#4a4058"/>
+            <circle cx="118" cy="225" r="7" fill="#ffffff"/>
+            <circle cx="133" cy="244" r="3" fill="#ffffff"/>
+            <circle cx="194" cy="234" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <circle cx="191" cy="237" r="9" fill="#4a4058"/>
+            <circle cx="186" cy="225" r="7" fill="#ffffff"/>
+            <circle cx="201" cy="244" r="3" fill="#ffffff"/>
+          </g>
+          <g id="eyesHappy" class="hidden">
+            <path d="M106 236 Q126 218 146 236" stroke="#3f3b49" stroke-width="6" fill="none" stroke-linecap="round"/>
+            <path d="M174 236 Q194 218 214 236" stroke="#3f3b49" stroke-width="6" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="eyesSleepy" class="hidden">
+            <circle cx="126" cy="236" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <circle cx="194" cy="236" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <rect x="103" y="218" width="46" height="22" rx="11" fill="#fffdf7"/>
+            <rect x="171" y="218" width="46" height="22" rx="11" fill="#fffdf7"/>
+            <path d="M103 226 L149 226 M171 226 L217 226" stroke="#3f3b49" stroke-width="4" stroke-linecap="round"/>
+          </g>
+          <g id="eyesAway" class="hidden">
+            <circle cx="132" cy="234" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <circle cx="135" cy="237" r="9" fill="#4a4058"/>
+            <circle cx="124" cy="225" r="7" fill="#ffffff"/>
+            <circle cx="200" cy="234" r="23" fill="#8f84b8" stroke="#6b6290" stroke-width="2"/>
+            <circle cx="197" cy="237" r="9" fill="#4a4058"/>
+            <circle cx="192" cy="225" r="7" fill="#ffffff"/>
+          </g>
+          <g id="eyesBlink" class="hidden">
+            <path d="M103 234 L149 234" stroke="#3f3b49" stroke-width="6" fill="none" stroke-linecap="round"/>
+            <path d="M171 234 L217 234" stroke="#3f3b49" stroke-width="6" fill="none" stroke-linecap="round"/>
+          </g>
+
+          <!-- 嘴 -->
+          <g id="mouthNeutral">
+            <path d="M150 270 L170 270" stroke="#c25a52" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="mouthSmile" class="hidden">
+            <path d="M148 270 Q160 282 172 270" stroke="#c25a52" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="mouthOpen" class="hidden">
+            <ellipse cx="160" cy="272" rx="8" ry="10" fill="#c25a52"/>
+          </g>
+          <g id="mouthPout" class="hidden">
+            <path d="M151 272 Q160 266 169 272" stroke="#c25a52" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </g>
+          <g id="mouthFrown" class="hidden">
+            <path d="M150 276 Q160 268 170 276" stroke="#c25a52" stroke-width="4" fill="none" stroke-linecap="round"/>
+          </g>
+
+          <!-- 鼓腮 + 脸红 -->
+          <g id="blush" class="hidden">
+            <ellipse cx="97" cy="256" rx="21" ry="15" fill="#f6efe3" stroke="#d8d0c0" stroke-width="2"/>
+            <ellipse cx="223" cy="256" rx="21" ry="15" fill="#f6efe3" stroke="#d8d0c0" stroke-width="2"/>
+            <ellipse cx="105" cy="260" rx="12" ry="7" fill="#ffa9b8" opacity="0.85"/>
+            <ellipse cx="215" cy="260" rx="12" ry="7" fill="#ffa9b8" opacity="0.85"/>
+          </g>
+        </g>
+
+        <!-- ===== 刘海（深灰发盖） ===== -->
+        <g id="hairFront">
+          <path fill="#3d3b47" stroke="#332f3c" stroke-width="2" stroke-linejoin="round"
+                d="M160 136 C118 136 98 150 98 170 C98 180 104 188 114 192 L126 178 L138 196 L150 176 L160 198 L170 176 L182 196 L194 178 L206 192 C216 188 222 180 222 170 C222 150 202 136 160 136 Z"/>
+          <path fill="#56546a" opacity="0.5" d="M126 154 C136 146 150 144 164 144 C152 150 140 158 126 154 Z"/>
+        </g>
+
+        <!-- ===== 兔耳（头顶） ===== -->
+        <g id="bunnyEars">
+          <path fill="#3d3b47" stroke="#332f3c" stroke-width="2" d="M130 142 C124 112 124 82 140 68 C152 80 154 112 147 142 Z"/>
+          <path fill="#e88a9a" d="M135 136 C131 112 131 88 140 76 C147 88 148 112 143 136 Z"/>
+          <path fill="#3d3b47" stroke="#332f3c" stroke-width="2" d="M190 142 C196 112 196 82 180 68 C168 80 166 112 173 142 Z"/>
+          <path fill="#e88a9a" d="M185 136 C189 112 189 88 180 76 C173 88 172 112 177 136 Z"/>
+        </g>
+
+      </g>
+      </svg>
+      <img id="user-image" alt="麻衣" />
+    </div>
+
+    <div id="chatbar" class="hidden">
+      <input id="chat-input" type="text" maxlength="200" placeholder="和学姐说点什么…（Enter 发送）" autocomplete="off" spellcheck="false" />
+    </div>
+
+    <div id="menu" class="hidden"></div>
+  </div>
+
+  <script src="phrases.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

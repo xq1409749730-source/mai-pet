@@ -1,0 +1,15 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.electron-cache/
+
+# 运行数据（含本地密钥，绝不提交）
+data/
+*.log
+
+# 本机 npm 配置（含 E 盘路径）
+.npmrc
+
+# 临时文件
+preview.png
+screenshot.js
