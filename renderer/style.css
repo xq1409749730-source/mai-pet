@@ -172,3 +172,128 @@ html, body {
 .menu-item.checked { color: #c24a5a; font-weight: 600; }
 .menu-item.checked::before { content: '✓ '; }
 .menu-sep { height: 1px; background: #eedede; margin: 4px 6px; }
+
+/* ---------- 记忆管理窗口 ---------- */
+#memory-window {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 40;
+  width: 78%;
+  max-height: 86%;
+  background: rgba(255, 255, 255, 0.98);
+  border: 1.5px solid #ead8d8;
+  border-radius: 14px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.memory-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #4a3b3b;
+  background: #fbeeee;
+  border-bottom: 1px solid #f0dcdc;
+}
+.memory-header button {
+  border: none;
+  background: transparent;
+  font-size: 14px;
+  cursor: pointer;
+  color: #8a6a6a;
+}
+.memory-body {
+  padding: 10px 12px;
+  overflow-y: auto;
+  font-size: 12.5px;
+  color: #4a3b3b;
+}
+.memory-body h4 {
+  margin: 12px 0 6px;
+  font-size: 13px;
+  color: #b04858;
+  border-bottom: 1px solid #f3e2e2;
+  padding-bottom: 3px;
+}
+.memory-body h4:first-child { margin-top: 2px; }
+.memory-body label { display: block; margin: 6px 0 2px; color: #7a6262; }
+.memory-body input, .memory-body textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #e6d2d2;
+  border-radius: 8px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+  background: #fffdfd;
+  color: #4a3b3b;
+  outline: none;
+}
+.memory-body input:focus, .memory-body textarea:focus { border-color: #d8a8b8; }
+.memory-body textarea { min-height: 46px; resize: vertical; }
+.memory-body button {
+  margin-top: 6px;
+  border: 1px solid #e2b8c0;
+  background: #fdeef0;
+  color: #a83248;
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.memory-body button:hover { background: #fadfe4; }
+.memory-body button.mem-danger { border-color: #e0b8b8; background: #fdf0f0; color: #b04a4a; }
+.mem-list { margin: 4px 0; max-height: 130px; overflow-y: auto; border: 1px solid #f0e0e0; border-radius: 8px; padding: 4px; background: #fffcfc; }
+.mem-empty { color: #b8a0a0; font-size: 12px; margin: 4px; }
+.mem-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  border-bottom: 1px dashed #f2e4e4;
+  font-size: 12px;
+}
+.mem-row:last-child { border-bottom: none; }
+.mem-ts { color: #a88a8a; font-size: 11px; white-space: nowrap; flex-shrink: 0; }
+.mem-text { flex: 1; word-break: break-all; }
+.mem-del {
+  border: none !important;
+  background: transparent !important;
+  color: #c06060 !important;
+  font-size: 11px !important;
+  padding: 1px 5px !important;
+  margin: 0 !important;
+  cursor: pointer;
+}
+
+/* 关系成长展示 */
+.mem-relationship {
+  background: #fdf4f4;
+  border: 1px solid #f0dcdc;
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-bottom: 4px;
+  font-size: 12.5px;
+  color: #8a5252;
+}
+.rel-line { font-weight: 600; margin-bottom: 5px; }
+.rel-bar {
+  height: 8px;
+  background: #f3e2e2;
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+.rel-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f0a8b8, #d86a80);
+  border-radius: 4px;
+  transition: width 0.6s ease;
+}
+.rel-hint { font-size: 11px; color: #b89292; line-height: 1.5; }

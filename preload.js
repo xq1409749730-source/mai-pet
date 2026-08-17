@@ -23,5 +23,17 @@ contextBridge.exposeInMainWorld('petApi', {
   getLlmConfig: () => ipcRenderer.invoke('get-llm-config'),
   // 桌面快捷方式 & 开机自启
   toggleAutoStart: () => ipcRenderer.invoke('toggle-autostart'),
-  createDesktopShortcut: () => ipcRenderer.invoke('create-desktop-shortcut')
+  createDesktopShortcut: () => ipcRenderer.invoke('create-desktop-shortcut'),
+  // 记忆系统
+  getMemory: () => ipcRenderer.invoke('get-memory'),
+  saveMemory: (section, value) => ipcRenderer.invoke('save-memory', section, value),
+  addRecent: (entry) => ipcRenderer.invoke('add-recent', entry),
+  deleteRecent: (index) => ipcRenderer.invoke('delete-recent', index),
+  addMilestone: (m) => ipcRenderer.invoke('add-milestone', m),
+  deleteMilestone: (index) => ipcRenderer.invoke('delete-milestone', index),
+  clearMemory: (section) => ipcRenderer.invoke('clear-memory', section),
+  // 亲密度与关系
+  dailyRitual: () => ipcRenderer.invoke('daily-ritual'),
+  addIntimacy: (category, amount) => ipcRenderer.invoke('add-intimacy', category, amount),
+  getRelationship: () => ipcRenderer.invoke('get-relationship')
 });

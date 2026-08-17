@@ -1,0 +1,127 @@
+// 记忆管理窗口：基础记忆 / 近期记忆 / 长期经历（纪念册）
+(function () {
+  'use strict';
+  const api = window.petApi;
+  const $ = (id) => document.getElementById(id);
+
+  let current = null;
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  async function load() {
+    try {
+      const m = await api.getMemory();
+      current = m || { profile: { schemaVersion: 1, name: '', preferences: {}, importantDates: [] }, recent: { entries: [] }, milestones: { entries: [] } };
+      renderProfile();
+      renderRecent();
+      renderMilestones();
+      renderRelationship();
+    } catch (e) { /* ignore */ }
+  }
+
+  function renderRelationship() {
+    api.getRelationship().then(r => {
+      const box = $('mem-relationship');
+      if (!box) return;
+      if (!r || !r.ok) { box.textContent = '关系数据未就绪'; return; }
+      const hideNum = !(window.petSettings && window.petSettings.showIntimacy);
+      const bar = Math.min(100, Math.round((r.intimacy / 500) * 100));
+      const emo = (window.petSettings && window.petSettings.emotion) || '平静';
+      box.innerHTML =
+        '<div class="rel-line"><b>' + escapeHtml(r.stage || '初识后辈') + '</b>' +
+        (hideNum ? '' : '（亲密 ' + r.intimacy + '）') +
+        ' · 连续陪伴 ' + (r.consecutiveDays || 0) + ' 天 · 此刻心情：' + escapeHtml(emo) + '</div>' +
+        '<div class="rel-bar"><div class="rel-fill" style="width:' + bar + '%"></div></div>' +
+        '<div class="rel-hint">亲密值只由日常陪伴积累：每日见面、连续陪伴、重要日子、用心聊天</div>';
+    }).catch(() => {});
+  }
+
+  function renderProfile() {
+    const p = current.profile || {};
+    $('mem-name').value = p.name || '';
+    const prefs = p.preferences || {};
+    $('mem-preferences').value = Object.entries(prefs).map(([k, v]) => v === true ? k : (k + ':' + v)).join(',');
+    const dates = Array.isArray(p.importantDates) ? p.importantDates : [];
+    $('mem-dates').value = dates.map(d => (d.label || '') + (d.date ? ',' + d.date : '')).join('\n');
+  }
+
+  function renderRecent() {
+    const list = $('mem-recent-list');
+    const entries = (current.recent && current.recent.entries) || [];
+    list.innerHTML = '';
+    if (entries.length === 0) { list.innerHTML = '<p class="mem-empty">暂无近期记忆</p>'; return; }
+    entries.forEach((e, i) => {
+      const d = new Date(e.ts);
+      const ts = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+      const row = document.createElement('div');
+      row.className = 'mem-row';
+      row.innerHTML = '<span class="mem-ts">' + ts + '</span><span class="mem-text">' + escapeHtml(e.summary || '') + '</span>';
+      const del = document.createElement('button');
+      del.textContent = '删';
+      del.className = 'mem-del';
+      del.title = '删除这条';
+      del.onclick = async () => { await api.deleteRecent(i); load(); };
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  function renderMilestones() {
+    const list = $('mem-milestone-list');
+    const entries = (current.milestones && current.milestones.entries) || [];
+    list.innerHTML = '';
+    if (entries.length === 0) { list.innerHTML = '<p class="mem-empty">暂无纪念册条目</p>'; return; }
+    entries.forEach((e, i) => {
+      const d = new Date(e.ts);
+      const ts = d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+      const row = document.createElement('div');
+      row.className = 'mem-row';
+      row.innerHTML = '<span class="mem-ts">' + ts + '</span><span class="mem-text"><b>' + escapeHtml(e.title || '') + '</b>' + (e.note ? ' — ' + escapeHtml(e.note) : '') + '</span>';
+      const del = document.createElement('button');
+      del.textContent = '删';
+      del.className = 'mem-del';
+      del.title = '删除这条';
+      del.onclick = async () => { await api.deleteMilestone(i); load(); };
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  async function saveProfile() {
+    const p = { schemaVersion: 1, name: $('mem-name').value.trim(), preferences: {}, importantDates: [] };
+    $('mem-preferences').value.split(/[,，]/).map(s => s.trim()).filter(Boolean).forEach(s => {
+      const i = s.indexOf(':');
+      if (i > 0) p.preferences[s.slice(0, i).trim()] = s.slice(i + 1).trim();
+      else p.preferences[s] = true;
+    });
+    $('mem-dates').value.split('\n').map(s => s.trim()).filter(Boolean).forEach(s => {
+      const i = s.lastIndexOf(',');
+      p.importantDates.push(i > 0 ? { label: s.slice(0, i).trim(), date: s.slice(i + 1).trim() } : { label: s, date: '' });
+    });
+    const res = await api.saveMemory('profile', p);
+    if (res && res.ok) load();
+  }
+
+  async function addMilestone() {
+    const title = $('mem-milestone-title').value.trim();
+    if (!title) return;
+    await api.addMilestone({ title, note: $('mem-milestone-note').value.trim() });
+    $('mem-milestone-title').value = '';
+    $('mem-milestone-note').value = '';
+    load();
+  }
+
+  $('memory-close').onclick = () => { $('memory-window').classList.add('hidden'); };
+  $('mem-save-profile').onclick = saveProfile;
+  $('mem-clear-recent').onclick = async () => { await api.clearMemory('recent'); load(); };
+  $('mem-clear-milestones').onclick = async () => { await api.clearMemory('milestones'); load(); };
+  $('mem-add-milestone').onclick = addMilestone;
+
+  window.Memory = {
+    open: () => { $('memory-window').classList.remove('hidden'); load(); },
+    close: () => { $('memory-window').classList.add('hidden'); },
+    load,
+  };
+})();

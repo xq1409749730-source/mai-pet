@@ -143,9 +143,38 @@
     </div>
 
     <div id="menu" class="hidden"></div>
+
+    <!-- 记忆管理窗口 -->
+    <div id="memory-window" class="hidden">
+      <div class="memory-header"><span>记忆管理</span><button id="memory-close" title="关闭">✕</button></div>
+      <div class="memory-body">
+        <div id="mem-relationship" class="mem-relationship">关系加载中…</div>
+
+        <h4>基础记忆（长期保留，可修改）</h4>
+        <label>称呼</label>
+        <input id="mem-name" placeholder="例如：后辈 / 主人 / 名字" />
+        <label>偏好（键:值，逗号分隔，如 奶茶:少糖）</label>
+        <input id="mem-preferences" placeholder="奶茶:少糖, 咖啡:不要" />
+        <label>重要日期（标签,日期，每行一条）</label>
+        <textarea id="mem-dates" placeholder="生日,12月25日"></textarea>
+        <button id="mem-save-profile">保存基础记忆</button>
+
+        <h4>近期记忆（30 天内，最多 50 条，自动过期）</h4>
+        <div id="mem-recent-list" class="mem-list"></div>
+        <button id="mem-clear-recent" class="mem-danger">清空近期记忆</button>
+
+        <h4>长期经历（纪念册）</h4>
+        <div id="mem-milestone-list" class="mem-list"></div>
+        <input id="mem-milestone-title" placeholder="纪念册标题，如：第一次一起通宵写代码" />
+        <input id="mem-milestone-note" placeholder="备注（可选）" />
+        <button id="mem-add-milestone">添加纪念册条目</button>
+        <button id="mem-clear-milestones" class="mem-danger">清空纪念册</button>
+      </div>
+    </div>
   </div>
 
   <script src="phrases.js"></script>
+  <script src="memory.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
