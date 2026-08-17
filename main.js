@@ -338,15 +338,25 @@ function desktopLnk() {
 function autostartOn() {
   try { return fs.existsSync(startupLnk()); } catch (e) { return false; }
 }
-function writeShortcut(lnkPath) {
-  shell.writeShortcutLink(lnkPath, 'create', {
-    target: process.execPath,
-    cwd: path.dirname(process.execPath),
-    description: '樱岛麻衣 Q 版桌宠',
+// 用 PowerShell COM 创建 .lnk（Electron shell.writeShortcutLink 在本机静默失败，改用更可靠的方式）
+function writeShortcutPwsh(lnkPath, targetPath, workDir) {
+  return new Promise((resolve) => {
+    const esc = (p) => String(p).replace(/'/g, "''");
+    const script =
+      "$ws = New-Object -ComObject WScript.Shell;" +
+      "$sc = $ws.CreateShortcut('" + esc(lnkPath) + "');" +
+      "$sc.TargetPath = '" + esc(targetPath) + "';" +
+      "$sc.WorkingDirectory = '" + esc(workDir) + "';" +
+      "$sc.Description = '樱岛麻衣 Q 版桌宠';" +
+      "$sc.Save()";
+    execFile('powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { timeout: 15000, windowsHide: true },
+      (err) => resolve(!err));
   });
 }
 
-ipcMain.handle('toggle-autostart', () => {
+ipcMain.handle('toggle-autostart', async () => {
   try {
     const lnk = startupLnk();
     if (fs.existsSync(lnk)) {
@@ -354,19 +364,19 @@ ipcMain.handle('toggle-autostart', () => {
       logDebug('autostart off');
       return { ok: true, enabled: false };
     }
-    writeShortcut(lnk);
-    logDebug('autostart on');
-    return { ok: true, enabled: true };
+    const ok = await writeShortcutPwsh(lnk, process.execPath, path.dirname(process.execPath));
+    logDebug('autostart on ok=' + ok);
+    return ok ? { ok: true, enabled: true } : { ok: false, error: '创建启动快捷方式失败' };
   } catch (err) {
     return { ok: false, error: (err && err.message) || String(err) };
   }
 });
 
-ipcMain.handle('create-desktop-shortcut', () => {
+ipcMain.handle('create-desktop-shortcut', async () => {
   try {
-    writeShortcut(desktopLnk());
-    logDebug('desktop shortcut created');
-    return { ok: true, path: desktopLnk() };
+    const ok = await writeShortcutPwsh(desktopLnk(), process.execPath, path.dirname(process.execPath));
+    logDebug('desktop shortcut ok=' + ok);
+    return ok ? { ok: true, path: desktopLnk() } : { ok: false, error: '创建桌面快捷方式失败' };
   } catch (err) {
     return { ok: false, error: (err && err.message) || String(err) };
   }
@@ -406,19 +416,6 @@ ipcMain.handle('show-context-menu', (_e, state) => {
         { label: '小', type: 'radio', checked: s.imageSize === 's', click: () => sendAction('set-image-size', 's') },
         { label: '中', type: 'radio', checked: s.imageSize === 'm', click: () => sendAction('set-image-size', 'm') },
         { label: '大', type: 'radio', checked: s.imageSize === 'l', click: () => sendAction('set-image-size', 'l') },
-      ],
-    },
-    {
-      label: '选择形象',
-      submenu: [
-        ...s.images.map(f => ({
-          label: f.name,
-          type: 'radio',
-          checked: s.imageName === f.name,
-          click: () => sendAction('set-image-name', f.name),
-        })),
-        { type: 'separator' },
-        { label: '自动（文件名最前）', type: 'radio', checked: !s.imageName, click: () => sendAction('set-image-name', '') },
       ],
     },
     {

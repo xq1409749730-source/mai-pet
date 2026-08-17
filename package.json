@@ -1,7 +1,7 @@
 {
   "name": "mai-pet",
   "productName": "麻衣桌宠",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "樱岛麻衣 Q 版桌宠（高冷傲娇学姐，叫你后辈）",
   "main": "main.js",
   "private": true,

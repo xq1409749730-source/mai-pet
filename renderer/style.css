@@ -37,18 +37,21 @@ html, body {
 }
 
 /* 用户自带的形象图片（放在「形象」文件夹里） */
+/* 固定宽度、高度自适应保持比例，禁止弹性伸缩，保证窗口精确贴合不被裁剪 */
 #user-image {
   display: none;
-  max-width: 190px;
-  max-height: 260px;
+  width: 190px;
+  height: auto;
+  max-height: 420px;
+  flex-shrink: 0;
+  flex-grow: 0;
   object-fit: contain;
   -webkit-user-drag: none;
   animation: breathe 3.2s ease-in-out infinite;
   transform-origin: 50% 100%;
-  transition: max-width 0.2s ease, max-height 0.2s ease;
 }
-#user-image.size-s { max-width: 140px; max-height: 190px; }
-#user-image.size-l { max-width: 250px; max-height: 340px; }
+#user-image.size-s { width: 140px; max-height: 320px; }
+#user-image.size-l { width: 250px; max-height: 520px; }
 
 /* 呼吸起伏 */
 .breathing {

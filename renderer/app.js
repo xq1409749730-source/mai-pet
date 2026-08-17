@@ -105,8 +105,13 @@
   function say(text, duration) {
     el.bubbleText.textContent = text;
     el.bubble.classList.add('visible');
+    applyCharState('speak'); // 说话时切换到「递便签」
     if (bubbleTimer) clearTimeout(bubbleTimer);
-    bubbleTimer = setTimeout(() => el.bubble.classList.remove('visible'), duration || 5200);
+    bubbleTimer = setTimeout(() => {
+      el.bubble.classList.remove('visible');
+      if (sleepyMode) applyCharState('sleepy');
+      else applyBaseImage();
+    }, duration || 5200);
   }
 
   // ---------- 用户自带的形象图片（放在「形象」文件夹） ----------
@@ -126,33 +131,23 @@
         el.svg.style.display = 'block';
         return;
       }
-      const pick = imageListCache.find(f => f.name === settings.imageName) || imageListCache[0];
-      showUserImage(pick.url);
+      buildStateImages();
+      // 基础形象：用户选的 → 「抱着书」→ 第一张
+      baseImageUrl = imageListCache.find(f => f.name === settings.imageName)?.url
+        || stateImageUrls.book
+        || imageListCache[0].url;
+      currentCharState = 'base';
+      setCharImage(baseImageUrl, true);
+      applyImageSize();
     } catch (e) { /* 保留默认 SVG 形象 */ }
-  }
-
-  function showUserImage(url) {
-    el.userImage.onload = () => { imgRetry = 0; fitWindowToImage(); };
-    // 加载失败自动重试（文件可能还没写完）
-    el.userImage.onerror = () => {
-      if (imgRetry < 6) {
-        imgRetry++;
-        setTimeout(() => {
-          const bust = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'r=' + Date.now();
-          el.userImage.src = bust;
-        }, 500 * imgRetry);
-      }
-    };
-    el.userImage.src = url;
-    el.userImage.style.display = 'block';
-    el.svg.style.display = 'none';
-    applyImageSize();
   }
 
   function applyImageSize() {
     el.userImage.classList.toggle('size-s', settings.imageSize === 's');
     el.userImage.classList.toggle('size-l', settings.imageSize === 'l');
-    setTimeout(fitWindowToImage, 300); // 等 0.2s 过渡动画结束再量尺寸
+    // 尺寸是瞬时的（无过渡），稍后重新贴合窗口
+    setTimeout(fitWindowToImage, 120);
+    setTimeout(fitWindowToImage, 600);
   }
 
   // 让窗口贴合图片大小（右侧放人物，左侧留出气泡区）
@@ -160,8 +155,83 @@
     if (el.userImage.style.display !== 'block') return;
     const r = el.userImage.getBoundingClientRect();
     if (r.width > 0 && r.height > 0) {
-      api.resizeTo(r.width + 170, r.height + 24);
+      api.resizeTo(Math.ceil(r.width) + 170, Math.ceil(r.height) + 30);
     }
+  }
+
+  // ---------- 互动图片自动切换（「形象」文件夹多张图按状态切换） ----------
+  const STATE_KEYWORDS = [
+    ['speak', '递便签'], ['think', '思考'], ['click', '害羞'], ['drag', '盯着'],
+    ['sleepy', '困倦'], ['wave', '挥手'], ['cup', '捧杯子'], ['happy', '庆祝'], ['book', '抱着书'],
+  ];
+  const stateImageUrls = {};
+  let baseImageUrl = null;
+  let currentCharState = 'base';
+  let sleepyMode = false;
+  let flashTimer = null;
+
+  function buildStateImages() {
+    Object.keys(stateImageUrls).forEach(k => delete stateImageUrls[k]);
+    if (!imageListCache.length) return;
+    imageListCache.forEach(f => {
+      for (const [state, kw] of STATE_KEYWORDS) {
+        if (stateImageUrls[state] === undefined && f.name.includes(kw)) stateImageUrls[state] = f.url;
+      }
+    });
+  }
+
+  function setCharImage(url, withRetry) {
+    if (!url) return;
+    el.userImage.onload = () => { imgRetry = 0; fitWindowToImage(); };
+    if (withRetry) {
+      el.userImage.onerror = () => {
+        if (imgRetry < 6) {
+          imgRetry++;
+          setTimeout(() => {
+            const bust = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'r=' + Date.now();
+            el.userImage.src = bust;
+          }, 500 * imgRetry);
+        }
+      };
+    }
+    el.userImage.src = url;
+    el.userImage.style.display = 'block';
+    el.svg.style.display = 'none';
+  }
+
+  // 用户操作唤醒（从困倦回到基础形象）
+  function wake() {
+    if (sleepyMode) {
+      sleepyMode = false;
+      applyBaseImage();
+    }
+  }
+
+  function applyCharState(state) {
+    if (state === currentCharState) return;
+    const url = stateImageUrls[state];
+    if (url === undefined) return;
+    currentCharState = state;
+    setCharImage(url);
+  }
+
+  function applyBaseImage() {
+    if (baseImageUrl) {
+      currentCharState = 'base';
+      setCharImage(baseImageUrl);
+    }
+  }
+
+  // 临时切换到某个状态图，ms 后回到基础形象（若期间被其他状态接管则不打断）
+  function flashState(state, ms) {
+    applyCharState(state);
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      if (currentCharState === state) {
+        if (sleepyMode) applyCharState('sleepy');
+        else applyBaseImage();
+      }
+    }, ms || 2600);
   }
 
   // ---------- 随机台词 ----------
@@ -187,15 +257,20 @@
   function showThinking() {
     el.bubbleText.textContent = '……';
     el.bubble.classList.add('visible');
+    applyCharState('think'); // 思考中切换到「思考」
     if (bubbleTimer) clearTimeout(bubbleTimer);
-    bubbleTimer = setTimeout(() => el.bubble.classList.remove('visible'), 15000);
+    bubbleTimer = setTimeout(() => {
+      el.bubble.classList.remove('visible');
+      if (sleepyMode) applyCharState('sleepy');
+      else applyBaseImage();
+    }, 15000);
   }
 
-  async function aiSay(contextPrompt, fallbackCategory, expr) {
+  async function aiSay(contextPrompt, fallbackCategory, expr, imageState) {
     if (aiPending) return;
-    if (!settings.aiEnabled || !llmConfigured) { speakRandom(fallbackCategory, expr); return; }
+    if (!settings.aiEnabled || !llmConfigured) { speakRandom(fallbackCategory, expr); if (imageState) flashState(imageState, 6000); return; }
     const now = Date.now();
-    if (now - lastAiSay < 45000) { speakRandom(fallbackCategory, expr); return; }
+    if (now - lastAiSay < 45000) { speakRandom(fallbackCategory, expr); if (imageState) flashState(imageState, 6000); return; }
     lastAiSay = now;
     aiPending = true;
     showThinking();
@@ -204,11 +279,14 @@
       if (res && res.ok && res.reply) {
         if (expr) setExpression(expr);
         say(res.reply);
+        if (imageState) flashState(imageState, 6000); // 特殊状态图（如喝水→捧杯子）
       } else {
         speakRandom(fallbackCategory, expr);
+        if (imageState) flashState(imageState, 6000);
       }
     } catch (e) {
       speakRandom(fallbackCategory, expr);
+      if (imageState) flashState(imageState, 6000);
     } finally {
       aiPending = false;
     }
@@ -248,6 +326,7 @@
   let dragStart = null;
 
   function onPointerDown(e) {
+    wake(); // 用户操作把她唤醒（退出困倦状态）
     dragging = true;
     moved = 0;
     dragStart = { sx: e.screenX, sy: e.screenY, wx: window.screenX, wy: window.screenY };
@@ -261,6 +340,7 @@
     if (moved > 6) {
       el.root.classList.add('dragged');
       setExpression('surprised');
+      applyCharState('drag'); // 被拎起来 →「盯着」
       api.moveTo(dragStart.wx + dx, dragStart.wy + dy);
     }
   }
@@ -271,6 +351,7 @@
     el.root.classList.remove('dragged');
     if (moved > 6) {
       speakRandom('drop', 'pout');
+      applyBaseImage(); // 放下后回到基础形象
     } else {
       clickReact();
     }
@@ -278,10 +359,10 @@
 
   function clickReact() {
     const r = Math.random();
-    if (r < 0.45) setExpression('happy');
-    else if (r < 0.7) setExpression('blush');
-    else if (r < 0.9) setExpression('pout');
-    else setExpression('normal');
+    let expr;
+    if (r < 0.45) { expr = 'happy'; flashState('happy', 2600); }   // 开心→庆祝
+    else { expr = r < 0.7 ? 'blush' : (r < 0.9 ? 'pout' : 'normal'); flashState('click', 2600); } // 害羞
+    setExpression(expr);
     aiSay('后辈用手指戳了你一下，请用傲娇又可爱的语气回应他。', 'click');
     // 随机动作：轻轻跳一下
     el.root.classList.remove('hop');
@@ -289,15 +370,8 @@
     el.root.classList.add('hop');
   }
 
-  el.layer.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
-
-  // 双击打开聊天
-  el.layer.addEventListener('dblclick', () => openChat());
-
-  // ---------- 右键菜单（系统原生菜单，不会因窗口小而显示不全） ----------
-  el.layer.addEventListener('contextmenu', async (e) => {
+  // 点击/拖拽/右键只响应在人物本体上（气泡区空白处不响应、不占位置）
+  async function onContextMenu(e) {
     e.preventDefault();
     try {
       // 每次打开菜单都实时刷新 AI 配置状态
@@ -316,7 +390,15 @@
       chatOpen: !el.chatbar.classList.contains('hidden'),
       images: imageListCache,
     });
-  });
+  }
+
+  // 同一时刻只有可见的那个（svg 或用户图片）能收到事件
+  el.svg.addEventListener('pointerdown', onPointerDown);
+  el.userImage.addEventListener('pointerdown', onPointerDown);
+  el.svg.addEventListener('contextmenu', onContextMenu);
+  el.userImage.addEventListener('contextmenu', onContextMenu);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
 
   api.onMenuAction(({ action, payload }) => {
     switch (action) {
@@ -375,6 +457,7 @@
   function hourOf() { return new Date().getHours(); }
   function timeGreeting() {
     const h = hourOf();
+    flashState('wave', 4000); // 问候时→挥手
     if (h >= 5 && h < 11) speakRandom('morning', 'happy');
     else if (h >= 11 && h < 14) speakRandom('noon', 'normal');
     else if (h >= 14 && h < 18) speakRandom('evening', 'normal');
@@ -431,6 +514,8 @@
 
       // 空闲检测
       if (fg.idleSeconds >= 300) { // 5 分钟无操作
+        sleepyMode = true;
+        applyCharState('sleepy'); // 困倦→困倦图
         aiSay('后辈已经很久没动电脑了，你困倦地打了个哈欠，对他说点什么。', 'idle', 'sleepy');
         return;
       }
@@ -452,7 +537,7 @@
   function healthLoop() {
     const now = Date.now();
     if (settings.reminders.sit && now - sitSince > 45 * 60000) { sitSince = now; aiSay('后辈已经久坐 45 分钟了，你提醒他起来活动一下。', 'healthSit', 'worried'); }
-    if (settings.reminders.water && now - waterSince > 60 * 60000) { waterSince = now; aiSay('该喝水了，你提醒后辈去喝口水。', 'healthWater', 'normal'); }
+    if (settings.reminders.water && now - waterSince > 60 * 60000) { waterSince = now; aiSay('该喝水了，你提醒后辈去喝口水。', 'healthWater', 'normal', 'cup'); } // 捧杯子
     if (settings.reminders.rest && now - restSince > 90 * 60000) { restSince = now; aiSay('后辈该休息一下了，你关心地提醒他。', 'healthRest', 'sleepy'); }
   }
 
