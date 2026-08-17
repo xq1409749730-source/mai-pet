@@ -186,7 +186,7 @@ function createWindow() {
   if (saved && positionVisible(saved.x, saved.y)) { opts.x = saved.x; opts.y = saved.y; }
 
   win = new BrowserWindow(opts);
-  win.setAlwaysOnTop(true, 'floating');
+  applyAlwaysOnTop();
   win.setMenuBarVisibility(false);
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
@@ -229,6 +229,7 @@ ipcMain.handle('resize-to', (_e, w, h) => {
   let newY = y + ch - h; // 底部保持不动，脚脚不飘
   [newX, newY] = clampToScreen(newX, newY, w, h);
   win.setBounds({ x: newX, y: newY, width: w, height: h });
+  applyAlwaysOnTop(); // 调整大小后重新置顶，防止 Windows 丢掉置顶标志
 });
 
 ipcMain.handle('reset-position', () => {
@@ -236,11 +237,20 @@ ipcMain.handle('reset-position', () => {
     win.center();
     const [x, y] = win.getPosition();
     savePos(x, y);
+    applyAlwaysOnTop();
   }
 });
 
+let currentOnTop = true;
+// 用最高层级并定期重新置顶，避免「有时没置顶」（Windows 会偶尔丢弃置顶标志）
+function applyAlwaysOnTop() {
+  if (!win) return;
+  try { win.setAlwaysOnTop(currentOnTop, 'screen-saver'); } catch (e) { /* 忽略 */ }
+}
+
 ipcMain.handle('set-ontop', (_e, flag) => {
-  if (win) win.setAlwaysOnTop(!!flag, 'floating');
+  currentOnTop = !!flag;
+  applyAlwaysOnTop();
   return win ? win.isAlwaysOnTop() : false;
 });
 
@@ -249,16 +259,24 @@ ipcMain.handle('get-ontop', () => (win ? win.isAlwaysOnTop() : true));
 ipcMain.handle('quit', () => { app.quit(); });
 
 // ---------- AI 对话（DeepSeek 大模型） ----------
-const PET_SYSTEM_PROMPT = [
-  '你是樱岛麻衣，一个高冷傲娇的学姐，也是后辈桌面上的可爱桌宠。',
-  '规则：',
-  '1. 称呼用户为「后辈」；',
-  '2. 说话简短自然，一般不超过 40 个字，口语化；',
-  '3. 语气高冷带点傲娇：嘴上嫌弃，心里其实关心后辈；',
-  '4. 偶尔脸红、嘴硬、哼一声，但很可爱；',
-  '5. 只输出说的话本身，不要加引号，不要加「她说：」之类的说明；',
-  '6. 用简体中文。',
-].join('\n');
+// 结构化情感上下文（角色/关系/状态/记忆/表达要求），DeepSeek 只负责自然表达
+function buildSystemPrompt() {
+  const r = readRelationship();
+  const e = decayEmotion(readEmotion());
+  const followups = dueFollowups();
+  const mem = memoryContext();
+  const fu = followups.length
+    ? '【相关记忆】' + followups.map(f => '后辈今天（' + f.date.slice(5) + '）有一件' + f.event + (f.importance === 'high' ? '，很重要' : '')).join('；')
+    : '';
+  return [
+    '【角色】你是麻衣风格的高冷学姐型桌宠，称呼用户为「后辈」。冷静、敏锐、偶尔傲娇，但关心必须自然，不使用夸张网络语。',
+    '【当前关系】阶段：' + stageOf(r.intimacy).name + '；亲密度：' + r.intimacy + '；相处天数：' + (r.consecutiveDays || 0) + ' 天',
+    '【当前状态】情绪：' + MOOD_INFO[e.mood].name + '；强度：' + (e.happiness >= 75 ? '高' : e.happiness >= 45 ? '中' : '低') + '；原因：' + (e.reason || '无特别事件') + '；精力：' + (e.energy >= 65 ? '充沛' : e.energy >= 40 ? '一般' : '偏低') + '；信任：' + e.trust,
+    mem,
+    fu,
+    '【表达要求】1. 回复 1~3 句话，简短自然；2. 延续当前情绪，不要突然转换；3. 可以含蓄关心，不要说教；4. 不要每次都使用「哼」「笨蛋」；5. 不虚构未提供的共同经历；6. 不自行修改亲密度或写入记忆；7. 结尾尽量自然，不要总以问题结束；8. 用简体中文。',
+  ].filter(l => l && l.trim()).join('\n');
+}
 
 function llmConfigFile() { return path.join(dataDir, 'llm-config.json'); }
 
@@ -297,7 +315,7 @@ ipcMain.handle('llm-chat', async (_e, messages) => {
   if (!spendAi('chat')) return { ok: false, error: '今日 AI 聊天预算已用完（100 次），明天再聊吧' };
   try {
     const history = Array.isArray(messages) ? messages.slice(-10) : [];
-    const reply = await llmCall([{ role: 'system', content: PET_SYSTEM_PROMPT + memoryContext() }, ...history], 220);
+    const reply = await llmCall([{ role: 'system', content: buildSystemPrompt() }, ...history], 220);
     logDebug('llm-chat OK len=' + reply.length);
     return { ok: true, reply };
   } catch (err) {
@@ -310,7 +328,7 @@ ipcMain.handle('llm-say', async (_e, prompt) => {
   if (!spendAi('say')) return { ok: false, error: '今日 AI 自动说话预算已用完（40 次）' };
   try {
     const reply = await llmCall([
-      { role: 'system', content: PET_SYSTEM_PROMPT + memoryContext() },
+      { role: 'system', content: buildSystemPrompt() },
       { role: 'user', content: String(prompt || '随便说点什么').slice(0, 300) },
     ], 120);
     logDebug('llm-say OK len=' + reply.length);
@@ -536,6 +554,7 @@ ipcMain.handle('daily-ritual', () => {
     const r = readRelationship();
     const today = todayKey();
     const before = r.intimacy;
+    const oldConsecutive = r.consecutiveDays || 0;
     const oldStage = stageOf(before).name;
     const result = { intimacy: before, stage: oldStage, consecutiveDays: r.consecutiveDays, changed: false, newStage: null, bonus: 0, events: [], already: false };
     if (r.lastSeenDate === today) { result.already = true; return { ok: true, ...result }; }
@@ -545,6 +564,10 @@ ipcMain.handle('daily-ritual', () => {
     r.consecutiveDays = (r.lastSeenDate === yKey) ? (r.consecutiveDays || 0) + 1 : 1;
 
     r.intimacy += 1; result.bonus += 1; // 每日签到
+    applyEmotionEvent('daily-visit'); // 每日见面：情绪归平静
+
+    // 久别重逢：连续天数重置 → 失落
+    if (oldConsecutive > 1 && r.consecutiveDays === 1) applyEmotionEvent('long-absence');
 
     // 重要日期：每个日期每年只奖励一次
     const imp = todayIsImportantDate();
@@ -586,6 +609,7 @@ ipcMain.handle('daily-ritual', () => {
     if (newStage.name !== oldStage) {
       result.newStage = newStage.name;
       result.changed = true;
+      applyEmotionEvent('praise'); // 关系升级：开心/害羞
       const m = readMemory('milestones') || { schemaVersion: 1, entries: [] };
       m.entries.push({ ts: Date.now(), title: '关系升级：' + newStage.name, note: '你和麻衣的关系更近了一步' });
       writeMemory('milestones', m);
@@ -593,6 +617,8 @@ ipcMain.handle('daily-ritual', () => {
     const recent = getRecent();
     recent.entries.push({ ts: Date.now(), category: 'daily', summary: '每日首次见面：和麻衣打了招呼' + (result.bonus > 1 ? '（+' + result.bonus + ' 亲密）' : '') });
     writeMemory('recent', recent);
+
+    result.followups = dueFollowups(); // 到期的约定（每日一次，会标记已提醒）
 
     return { ok: true, ...result };
   } catch (err) { return { ok: false, error: (err && err.message) || String(err) }; }
@@ -626,6 +652,149 @@ ipcMain.handle('get-relationship', () => {
     lastSeenDate: r.lastSeenDate, stageMin: cur.min, nextStageMin: next ? next.min : null,
   };
 });
+
+// ---------- 情感引擎（连续情绪状态，本地规则计算，AI 只负责表达） ----------
+const MOOD_INFO = {
+  calm:      { name: '平静', image: 'book' },
+  happy:     { name: '开心', image: 'happy' },
+  shy:       { name: '害羞', image: 'click' },
+  concerned: { name: '担心', image: 'remind' },
+  upset:     { name: '小生气', image: 'angry' },
+  lonely:    { name: '失落', image: 'book' },
+  tired:     { name: '困倦', image: 'sleepy' },
+  expectant: { name: '期待', image: 'wave' },
+  relieved:  { name: '安心', image: 'book' },
+};
+const MOOD_EXPIRE_MS = 30 * 60000; // 情绪持续约 30 分钟后缓慢回平静
+const TRUST_BY_STAGE = [40, 55, 70, 85, 95]; // 按关系阶段（0~4）
+
+function defaultEmotion() {
+  return { schemaVersion: 1, mood: 'calm', happiness: 55, energy: 60, trust: 40, reason: '', since: 0, updatedAt: 0 };
+}
+function readEmotion() {
+  return Object.assign(defaultEmotion(), readMemory('emotion') || {});
+}
+function stageIndex() {
+  const r = readRelationship();
+  const cur = stageOf(r.intimacy);
+  return INTIMACY_STAGES.indexOf(cur);
+}
+// 情绪衰减：mood 超时回平静；happiness/energy 缓慢趋向基线
+function decayEmotion(e) {
+  const now = Date.now();
+  if (e.mood !== 'calm' && now - (e.since || now) > MOOD_EXPIRE_MS) {
+    e.mood = 'calm';
+    e.reason = '';
+  }
+  const base = defaultEmotion();
+  if (e.happiness > base.happiness) e.happiness = Math.max(base.happiness, e.happiness - 1);
+  if (e.happiness < base.happiness) e.happiness = Math.min(base.happiness, e.happiness + 1);
+  if (e.energy > base.energy) e.energy = Math.max(base.energy, e.energy - 1);
+  if (e.energy < base.energy) e.energy = Math.min(base.energy, e.energy + 1);
+  // trust 不低于当前阶段基线
+  const trustFloor = TRUST_BY_STAGE[Math.min(stageIndex(), TRUST_BY_STAGE.length - 1)] || 40;
+  if (e.trust < trustFloor) e.trust = trustFloor;
+  return e;
+}
+// 情绪事件规则：用户事件 → 本地规则改变情绪 + 保存原因
+function applyEmotionEvent(eventType, detail) {
+  const e = decayEmotion(readEmotion());
+  const now = Date.now();
+  const hour = new Date().getHours();
+  switch (eventType) {
+    case 'daily-visit':
+      e.mood = 'calm'; e.happiness = Math.min(100, e.happiness + 2); e.energy = Math.min(100, e.energy + 5);
+      e.reason = '和麻衣打了招呼'; break;
+    case 'long-activity':
+      e.mood = 'concerned'; e.reason = (detail && detail.text) || '后辈连续使用电脑很久了';
+      e.energy = Math.max(0, e.energy - 3); break;
+    case 'high-load':
+      e.mood = 'concerned'; e.reason = '后辈的电脑负载很高，有点担心'; e.energy = Math.max(0, e.energy - 2); break;
+    case 'late-night':
+      if (e.mood === 'calm' || e.mood === 'happy') { e.mood = hour >= 23 ? 'concerned' : 'calm'; }
+      e.reason = '已经很晚了，后辈'; break;
+    case 'idle':
+      e.mood = 'tired'; e.reason = '后辈好久没动静了'; e.energy = Math.max(0, e.energy - 2); break;
+    case 'user-ok':
+      e.mood = 'relieved'; e.reason = '后辈听进去了，放心多了'; e.happiness = Math.min(100, e.happiness + 3); break;
+    case 'praise':
+      e.mood = Math.random() < 0.5 ? 'shy' : 'happy'; e.reason = '和麻衣的关系更进一步';
+      e.happiness = Math.min(100, e.happiness + 8); break;
+    case 'ignored-reminder':
+      e.mood = 'upset'; e.reason = '后辈又没理我的提醒'; e.happiness = Math.max(0, e.happiness - 4); break;
+    case 'long-absence':
+      e.mood = 'lonely'; e.reason = '好久没见到后辈了'; break;
+    case 'chat':
+      e.happiness = Math.min(100, e.happiness + 2); e.trust = Math.min(100, e.trust + 1);
+      if (e.mood !== 'concerned' && e.mood !== 'upset' && e.mood !== 'lonely') e.mood = Math.random() < 0.4 ? 'happy' : e.mood;
+      e.reason = '和后辈聊得很开心'; break;
+    case 'drag':
+      e.mood = 'upset'; e.reason = '被后辈拎起来了'; break;
+  }
+  e.since = now;
+  e.updatedAt = now;
+  writeMemory('emotion', e);
+  return e;
+}
+
+ipcMain.handle('get-emotion', () => {
+  const e = decayEmotion(readEmotion());
+  return { ok: true, mood: e.mood, moodName: MOOD_INFO[e.mood].name, image: MOOD_INFO[e.mood].image, happiness: e.happiness, energy: e.energy, trust: e.trust, reason: e.reason };
+});
+
+ipcMain.handle('emotion-event', (_e, eventType, detail) => {
+  try {
+    const e = applyEmotionEvent(String(eventType || ''), detail);
+    return { ok: true, mood: e.mood, moodName: MOOD_INFO[e.mood].name, image: MOOD_INFO[e.mood].image, happiness: e.happiness, energy: e.energy, trust: e.trust, reason: e.reason };
+  } catch (err) { return { ok: false, error: (err && err.message) || String(err) }; }
+});
+
+// ---------- 约定与回访 ----------
+function followupFile() { return path.join(dataDir, 'memory', 'followups.json'); }
+function readFollowups() {
+  try { const f = JSON.parse(fs.readFileSync(followupFile(), 'utf8')); return Array.isArray(f.entries) ? f : { schemaVersion: 1, entries: [] }; }
+  catch (e) { return { schemaVersion: 1, entries: [] }; }
+}
+function writeFollowups(f) {
+  try { fs.mkdirSync(path.join(dataDir, 'memory'), { recursive: true }); fs.writeFileSync(followupFile(), JSON.stringify(f, null, 2)); } catch (e) { /* 忽略 */ }
+}
+// 解析"明天/后天/星期X + 事件"
+function parseFollowup(text) {
+  const t = String(text || '');
+  let date = null;
+  let m = t.match(/明天(?:早上|上午|中午|下午|晚上|一早)?[，,、 ]*(.+)/);
+  let daysAhead = 1;
+  if (!m) { m = t.match(/后天[，,、 ]*(.+)/); daysAhead = 2; }
+  if (!m) return null;
+  const subject = (m[1] || '').trim().slice(0, 14);
+  if (subject.length < 1) return null;
+  const d = new Date(Date.now() + daysAhead * 86400000);
+  const dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  return { event: subject, date: dateStr, importance: 'high', followUp: true, createdTs: Date.now(), reminded: false };
+}
+ipcMain.handle('add-followup', (_e, text) => {
+  try {
+    const fu = parseFollowup(text);
+    if (!fu) return { ok: false, found: false };
+    const f = readFollowups();
+    f.entries.push(fu);
+    writeFollowups(f);
+    return { ok: true, found: true, event: fu.event, date: fu.date };
+  } catch (err) { return { ok: false, error: (err && err.message) || String(err) }; }
+});
+// 到期的约定（今天或昨天未提醒的），并标记已提醒（每日一次）
+function dueFollowups() {
+  const f = readFollowups();
+  const today = todayKey();
+  const yesterday = new Date(Date.now() - 86400000);
+  const yKey = yesterday.getFullYear() + '-' + String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + String(yesterday.getDate()).padStart(2, '0');
+  const due = f.entries.filter(e => !e.reminded && (e.date === today || e.date === yKey));
+  if (due.length) {
+    f.entries.forEach(e => { if (due.includes(e)) e.reminded = true; });
+    writeFollowups(f);
+  }
+  return due.map(e => ({ event: e.event, date: e.date, importance: e.importance }));
+}
 
 // ---------- AI 调用预算与记忆上下文 ----------
 const AI_DAILY_LIMIT = { say: 40, chat: 100 };
@@ -748,6 +917,8 @@ ipcMain.handle('show-context-menu', (_e, state) => {
 
 app.whenReady().then(() => {
   createWindow();
+  // 每 15 秒重新置顶一次，对抗 Windows 偶尔丢失置顶状态
+  setInterval(() => { if (currentOnTop) applyAlwaysOnTop(); }, 15000);
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 

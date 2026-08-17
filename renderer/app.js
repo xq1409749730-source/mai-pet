@@ -20,6 +20,13 @@
     aiManualOnly: false,    // 仅手动聊天时使用 AI（关闭自动 AI 说话）
   }, JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
 
+  // 恢复健康提醒（此前误将其默认关闭）；顺带重置旧的关闭标记
+  if (localStorage.getItem('mai-pet-reminders-v2')) {
+    settings.reminders = { sit: true, water: true, rest: true };
+    localStorage.removeItem('mai-pet-reminders-v2');
+    saveSettings();
+  }
+
   // ---------- 情绪状态机（程序算情绪，AI 只负责组织台词） ----------
   const EMOTION_STATES = {
     calm:   { name: '平静', image: 'book' },
@@ -43,10 +50,35 @@
   function emotionName() { return EMOTION_STATES[emotion.state].name; }
   function emotionImage() { return EMOTION_STATES[emotion.state].image; }
 
-  // 把当前情绪注入 AI 上下文（阶段 7 会扩展更多上下文）
+  // 把当前时间/模式注入 AI 上下文（情绪与关系已由主进程注入系统提示词）
   function aiContext() {
     return '（当前时间 ' + new Date().getHours() + ':' + String(new Date().getMinutes()).padStart(2, '0') +
-      '，麻衣当前情绪：' + emotionName() + '，主动模式：' + ({ quiet: '安静', daily: '日常', active: '活跃' }[settings.activityMode] || '日常') + '）';
+      '，主动模式：' + ({ quiet: '安静', daily: '日常', active: '活跃' }[settings.activityMode] || '日常') + '）';
+  }
+
+  // ---------- 持久情感引擎（主进程 emotion.json；情绪对应形象与动作） ----------
+  const MOOD_IMAGE = { calm: 'book', happy: 'happy', shy: 'click', concerned: 'remind', upset: 'angry', lonely: 'book', tired: 'sleepy', expectant: 'wave', relieved: 'book' };
+  const MOOD_NAME = { calm: '平静', happy: '开心', shy: '害羞', concerned: '担心', upset: '小生气', lonely: '失落', tired: '困倦', expectant: '期待', relieved: '安心' };
+  let persistentEmotion = { mood: 'calm', happiness: 55, energy: 60, trust: 40, reason: '' };
+  async function refreshEmotion() {
+    try {
+      const r = await api.getEmotion();
+      if (r && r.ok) persistentEmotion = { mood: r.mood, happiness: r.happiness, energy: r.energy, trust: r.trust, reason: r.reason };
+    } catch (e) { /* 忽略 */ }
+  }
+  // 用户事件 → 本地规则改变情绪 → 记录原因 → 切换对应形象
+  async function applyEmotionEvent(type, detail) {
+    try {
+      const r = await api.emotionEvent(type, detail);
+      if (r && r.ok) {
+        const prev = persistentEmotion.mood;
+        persistentEmotion = { mood: r.mood, happiness: r.happiness, energy: r.energy, trust: r.trust, reason: r.reason };
+        if (r.mood !== 'calm' && r.mood !== prev) {
+          flashState(MOOD_IMAGE[r.mood] || 'book', 6000); // 情绪对应形象（担心→提醒 等）
+        }
+      }
+      return r;
+    } catch (e) { return null; }
   }
 
   // ---------- 三档主动模式 + 勿扰 ----------
@@ -150,7 +182,12 @@
   function say(text, duration) {
     el.bubbleText.textContent = text;
     el.bubble.classList.add('visible');
-    applyCharState('speak'); // 说话时切换到「递便签」
+    // 说话不强制「递便签」：保留当前形象（思考/害羞/挥手等都算说话）
+    // 只有从默认形象说话时，才随机挑一个说话姿势增加变化
+    if (currentCharState === 'base') {
+      const pool = ['speak', 'think', 'laugh', 'wave', 'book'];
+      applyCharState(pool[Math.floor(Math.random() * pool.length)]);
+    }
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
       el.bubble.classList.remove('visible');
@@ -282,7 +319,7 @@
   }
 
   // 定期随机小动作：让形象经常切换（间隔按三档模式；安静/勿扰时不做）
-  const IDLE_ACTION_POOL = ['wave', 'think', 'cup', 'happy', 'laugh', 'book'];
+  const IDLE_ACTION_POOL = ['wave', 'think', 'cup', 'happy', 'laugh', 'remind', 'angry', 'book'];
   function scheduleIdleAction() {
     if (idleActionTimer) clearTimeout(idleActionTimer);
     const act = activity();
@@ -320,9 +357,11 @@
   }
 
   // ---------- AI 生成的话（失败/限流时回退到台词库） ----------
+  let thinkAt = 0;
   function showThinking() {
     el.bubbleText.textContent = '……';
     el.bubble.classList.add('visible');
+    thinkAt = Date.now();
     applyCharState('think'); // 思考中切换到「思考」
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
@@ -349,14 +388,18 @@
     try {
       const res = await api.llmSay(contextPrompt + aiContext());
       if (res && res.ok && res.reply) {
-        if (expr) setExpression(expr);
-        say(res.reply);
-        if (imageState) {
-          flashState(imageState, 6000); // 特殊状态图（如喝水→捧杯子）
-        } else if (Math.random() < 0.4) {
-          // 说完后偶尔来个可爱的小表情：偷笑 / 庆祝
-          flashState(Math.random() < 0.6 ? 'laugh' : 'happy', 2600);
-        }
+        // 思考图至少展示 1.2 秒，再切换为说话（递便签）
+        const wait = Math.max(0, 1200 - (Date.now() - thinkAt));
+        setTimeout(() => {
+          if (expr) setExpression(expr);
+          say(res.reply);
+          if (imageState) {
+            flashState(imageState, 6000); // 特殊状态图（如喝水→捧杯子）
+          } else if (Math.random() < 0.4) {
+            // 说完后偶尔来个可爱的小表情：偷笑 / 庆祝
+            flashState(Math.random() < 0.6 ? 'laugh' : 'happy', 2600);
+          }
+        }, wait);
       } else {
         speakRandom(fallbackCategory, expr);
         if (imageState) flashState(imageState, 6000);
@@ -394,16 +437,26 @@
       lastChatMsg = text;
       lastChatTs = now;
     }
+    // 用户回应：若之前正担心/困倦/生气（如提醒后），转为安心
+    if (reminderPendingAt) { reminderPendingAt = 0; applyEmotionEvent('user-ok'); }
+    else if (['concerned', 'tired', 'upset'].includes(persistentEmotion.mood)) applyEmotionEvent('user-ok');
+    // 约定提取：如"明天面试" → 记录回访
+    api.addFollowup(text).then(res => {
+      if (res && res.ok && res.found) say('（记住了：明天' + res.event + '，我会记着的。）');
+    }).catch(() => {});
     showThinking();
     const res = await api.llmChat(chatHistory);
     if (res && res.ok && res.reply) {
       chatHistory.push({ role: 'assistant', content: res.reply });
-      say(res.reply);
-      setEmotion('happy', 10000);
-      if (chatRounds >= 2) { // 满 2 轮有效对话 → +1（每日上限 3 由主进程控制）
-        chatRounds = 0;
-        api.addIntimacy('chat', 1).catch(() => {});
-      }
+      // 思考图至少展示 1.2 秒再说话
+      setTimeout(() => {
+        say(res.reply);
+        applyEmotionEvent('chat'); // 用心聊天 → 开心/信任
+        if (chatRounds >= 2) { // 满 2 轮有效对话 → +1（每日上限 3 由主进程控制）
+          chatRounds = 0;
+          api.addIntimacy('chat', 1).catch(() => {});
+        }
+      }, Math.max(0, 1200 - (Date.now() - thinkAt)));
     } else {
       chatHistory.pop();
       say((res && res.error) ? '（AI 出错：' + res.error + '）' : '（AI 没理我…）');
@@ -416,12 +469,15 @@
 
   // ---------- 点击 / 拖拽 ----------
   let dragging = false;
+  let dragVisualized = false; // 拖拽视觉只设置一次，避免 move 高频闪烁
   let moved = 0;
   let dragStart = null;
 
   function onPointerDown(e) {
     wake(); // 用户操作把她唤醒（退出困倦状态）
+    if (reminderPendingAt) { reminderPendingAt = 0; applyEmotionEvent('user-ok'); } // 回应提醒 → 安心
     dragging = true;
+    dragVisualized = false;
     moved = 0;
     dragStart = { sx: e.screenX, sy: e.screenY, wx: window.screenX, wy: window.screenY };
   }
@@ -432,10 +488,13 @@
     const dy = e.screenY - dragStart.sy;
     moved = Math.max(moved, Math.abs(dx) + Math.abs(dy));
     if (moved > 6) {
-      el.root.classList.add('dragged');
-      setExpression('surprised');
-      applyCharState('drag'); // 被拎起来 →「盯着」
-      setEmotion('upset', 5000);
+      if (!dragVisualized) {
+        dragVisualized = true;
+        el.root.classList.add('dragged');
+        setExpression('surprised');
+        applyCharState('drag'); // 被拎起来 →「盯着」
+        if (Math.random() < 0.35) flashState('angry', 2500); // 偶尔被拎起来会有点生气
+      }
       api.moveTo(dragStart.wx + dx, dragStart.wy + dy);
     }
   }
@@ -445,6 +504,7 @@
     dragging = false;
     el.root.classList.remove('dragged');
     if (moved > 6) {
+      applyEmotionEvent('drag'); // 拖拽结束触发一次（避免 move 高频写盘）
       speakRandom('drop', 'pout');
       applyBaseImage(); // 放下后回到基础形象
     } else {
@@ -452,7 +512,25 @@
     }
   }
 
+  // 连点检测：1.2 秒内连点 3 次 → 她真的生气了
+  let clickStamp = 0;
+  let clickBurst = 0;
   function clickReact() {
+    const now = Date.now();
+    if (now - clickStamp < 1200) clickBurst += 1;
+    else clickBurst = 1;
+    clickStamp = now;
+    if (clickBurst >= 3) {
+      clickBurst = 0;
+      setExpression('pout');
+      flashState('angry', 2600);   // 有点生气
+      setEmotion('upset', 6000);
+      speakRandom('angry');
+      el.root.classList.remove('hop');
+      void el.root.offsetWidth;
+      el.root.classList.add('hop');
+      return;
+    }
     const r = Math.random();
     let expr;
     // 多种点击反应，切换更多：庆祝 / 害羞 / 有点生气 / 偷笑
@@ -461,27 +539,30 @@
     else if (r < 0.84) { expr = 'pout'; flashState('angry', 2200); setEmotion('upset', 5000); }
     else { expr = 'normal'; flashState('laugh', 2200); setEmotion('happy', 6000); }
     setExpression(expr);
-    aiSay('后辈用手指戳了你一下，请用傲娇又可爱的语气回应他。', 'click');
+    // 先让点击反应图展示约 1 秒，再进入 AI 思考/说话（否则点击图一闪而过）
+    setTimeout(() => aiSay('后辈用手指戳了你一下，请用傲娇又可爱的语气回应他。', 'click'), 1000);
     // 随机动作：轻轻跳一下
     el.root.classList.remove('hop');
     void el.root.offsetWidth;
     el.root.classList.add('hop');
   }
 
-  // 鼠标悬停交互：鼠标碰到她会有反应（有冷却，避免频繁触发）
+  // 鼠标悬停交互：鼠标靠近/碰到她就有反应（冷却较短，响应更灵敏）
   let lastHover = 0;
   function hoverReact() {
     if (dragging || aiPending) return;
     const now = Date.now();
-    if (now - lastHover < 4000) return;
+    if (now - lastHover < 2200) return;
     lastHover = now;
     wake(); // 鼠标靠近也把她唤醒
     const r = Math.random();
     if (r < 0.4) flashState('click', 1800);       // 害羞
     else if (r < 0.7) flashState('laugh', 1800);  // 偷笑
     else flashState('wave', 1800);                // 挥手
-    // 说话概率按三档模式；勿扰时不说话
-    if (!dndActive() && Math.random() < activity().speakChance) speakRandom('hover');
+    // 说话概率按三档模式；勿扰时不说话（延迟 0.7s，先让悬停反应图展示）
+    if (!dndActive() && Math.random() < activity().speakChance) {
+      setTimeout(() => speakRandom('hover'), 700);
+    }
     if (Math.random() < 0.3) setEmotion('shy', 6000); // 被盯着看偶尔害羞
   }
 
@@ -519,8 +600,8 @@
   el.userImage.addEventListener('pointerdown', onPointerDown);
   el.svg.addEventListener('contextmenu', onContextMenu);
   el.userImage.addEventListener('contextmenu', onContextMenu);
-  el.svg.addEventListener('mouseenter', hoverReact);      // 鼠标悬停交互
-  el.userImage.addEventListener('mouseenter', hoverReact);
+  // 悬停交互：监听整个窗口区域（鼠标一靠近就有反应，更灵敏）
+  el.layer.addEventListener('mouseenter', hoverReact);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
 
@@ -628,10 +709,19 @@
 
   let lastHour = -1;
   function timeLoop() {
+    // 勿扰刚到期：提醒一下（用「提醒」形象）
+    if (settings.dndUntil > 0 && !dndActive()) {
+      settings.dndUntil = 0;
+      settings.dndReason = '';
+      saveSettings();
+      flashState('remind', 4000);
+      say('（勿扰时间到了，后辈）');
+    }
     if (dndActive()) { lastHour = hourOf(); return; } // 勿扰：跳过整点报时
     const h = hourOf();
     if (lastHour >= 0 && h !== lastHour) {
       speakThrottled('hourly', 'normal', 3600000);
+      if (h >= 23) applyEmotionEvent('late-night'); // 深夜 → 担心
     }
     lastHour = h;
   }
@@ -642,7 +732,7 @@
   async function sysLoop() {
     try {
       const s = await api.sysStats();
-      if (s.cpu >= 80 && !cpuHighNotified) { cpuHighNotified = true; setEmotion('worried', 120000); aiSay('检测到电脑 CPU 占用高达 ' + s.cpu + '%，你担心地对后辈说点什么。', 'cpuHigh', 'worried'); }
+      if (s.cpu >= 80 && !cpuHighNotified) { cpuHighNotified = true; setEmotion('worried', 120000); applyEmotionEvent('high-load'); aiSay('检测到电脑 CPU 占用高达 ' + s.cpu + '%，你担心地对后辈说点什么。', 'cpuHigh', 'worried'); }
       else if (s.cpu < 50) cpuHighNotified = false;
       if (s.mem >= 85 && !memHighNotified) { memHighNotified = true; setEmotion('worried', 120000); aiSay('检测到电脑内存占用高达 ' + s.mem + '%，你提醒一下后辈。', 'memHigh', 'worried'); }
       else if (s.mem < 60) memHighNotified = false;
@@ -680,8 +770,17 @@
         sleepyMode = true;
         applyCharState('sleepy'); // 困倦→困倦图
         setEmotion('tired', 600000);
+        applyEmotionEvent('idle');
         aiSay('后辈已经很久没动电脑了，你困倦地打了个哈欠，对他说点什么。', 'idle', 'sleepy');
         return;
+      }
+
+      // 连续活动累计：60 分钟 → 担心
+      if (fg.idleSeconds < 60) activeMinutes += 20 / 60;
+      else activeMinutes = 0;
+      if (activeMinutes >= 60) {
+        activeMinutes = 0;
+        applyEmotionEvent('long-activity', { text: '后辈连续使用电脑已经一小时了' });
       }
 
       const cat = categorize(fg);
@@ -696,15 +795,23 @@
     } catch (e) { /* ignore */ }
   }
 
+  let activeMinutes = 0; // 连续活动累计（分钟）
+
   // ---------- 健康提醒 ----------
   let sitSince = Date.now();
   let waterSince = Date.now();
   let restSince = Date.now();
+  let reminderPendingAt = 0; // 提醒后用户是否回应（未回应 → 小生气）
   function healthLoop() {
     const now = Date.now();
-    if (settings.reminders.sit && now - sitSince > 45 * 60000) { sitSince = now; aiSay('后辈已经久坐 45 分钟了，你提醒他起来活动一下。', 'healthSit', 'worried', 'remind'); } // 提醒
-    if (settings.reminders.water && now - waterSince > 60 * 60000) { waterSince = now; aiSay('该喝水了，你提醒后辈去喝口水。', 'healthWater', 'normal', 'cup'); } // 捧杯子
-    if (settings.reminders.rest && now - restSince > 90 * 60000) { restSince = now; aiSay('后辈该休息一下了，你关心地提醒他。', 'healthRest', 'sleepy', 'remind'); } // 提醒
+    if (settings.reminders.sit && now - sitSince > 15 * 60000) { sitSince = now; reminderPendingAt = now; applyEmotionEvent('concerned', { text: '后辈久坐 15 分钟了' }); aiSay('后辈已经久坐 15 分钟了，你提醒他起来活动一下。', 'healthSit', 'worried', 'remind'); } // 提醒
+    if (settings.reminders.water && now - waterSince > 20 * 60000) { waterSince = now; reminderPendingAt = now; applyEmotionEvent('concerned', { text: '后辈该喝水了' }); aiSay('该喝水了，你提醒后辈去喝口水。', 'healthWater', 'normal', 'cup'); } // 捧杯子
+    if (settings.reminders.rest && now - restSince > 30 * 60000) { restSince = now; reminderPendingAt = now; applyEmotionEvent('concerned', { text: '后辈该休息了' }); aiSay('后辈该休息一下了，你关心地提醒他。', 'healthRest', 'sleepy', 'remind'); } // 提醒
+    // 提醒 8 分钟后用户仍无回应 → 小生气（被忽略）
+    if (reminderPendingAt && now - reminderPendingAt > 8 * 60000) {
+      reminderPendingAt = 0;
+      applyEmotionEvent('ignored-reminder');
+    }
   }
 
   // ---------- 启动 ----------
@@ -742,22 +849,31 @@
       api.dailyRitual().then(res => {
         if (res && res.ok) {
           refreshRelationship();
+          refreshEmotion();
           if (res.newStage) {
             say('（关系升级：' + res.newStage + '）');
             flashState('happy', 3200);
+          }
+          // 到期的约定：主动回访（每日一次）
+          if (res.followups && res.followups.length) {
+            const fu = res.followups[0];
+            flashState('remind', 4000);
+            say('（今天就是' + fu.event + '的日子了……后辈，准备好了吗？）');
           }
         }
       }).catch(() => {});
     } else {
       refreshRelationship();
+      refreshEmotion();
     }
   }
 
   let relState = { intimacy: 0, stage: '初识后辈', consecutiveDays: 0 };
-  // 供记忆窗口读取设置（隐藏亲密度数值时）与当前情绪
+  // 供记忆窗口读取设置（隐藏亲密度数值时）与持久情绪
   window.petSettings = {
     get showIntimacy() { return settings.showIntimacy; },
-    get emotion() { return emotionName(); },
+    get emotion() { return MOOD_NAME[persistentEmotion.mood] || '平静'; },
+    get emotionReason() { return persistentEmotion.reason || ''; },
   };
   function refreshRelationship() {
     api.getRelationship().then(r => {

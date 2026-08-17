@@ -35,5 +35,10 @@ contextBridge.exposeInMainWorld('petApi', {
   // 亲密度与关系
   dailyRitual: () => ipcRenderer.invoke('daily-ritual'),
   addIntimacy: (category, amount) => ipcRenderer.invoke('add-intimacy', category, amount),
-  getRelationship: () => ipcRenderer.invoke('get-relationship')
+  getRelationship: () => ipcRenderer.invoke('get-relationship'),
+  // 情感引擎
+  getEmotion: () => ipcRenderer.invoke('get-emotion'),
+  emotionEvent: (type, detail) => ipcRenderer.invoke('emotion-event', type, detail),
+  // 约定与回访
+  addFollowup: (text) => ipcRenderer.invoke('add-followup', text)
 });
