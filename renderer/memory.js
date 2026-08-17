@@ -27,14 +27,16 @@
       if (!box) return;
       if (!r || !r.ok) { box.textContent = '关系数据未就绪'; return; }
       const hideNum = !(window.petSettings && window.petSettings.showIntimacy);
-      const bar = Math.min(100, Math.round((r.intimacy / 500) * 100));
+      const curMin = r.stageMin || 0;
+      const nextMin = r.nextStageMin;
+      const bar = nextMin ? Math.min(100, Math.round(((r.intimacy - curMin) / (nextMin - curMin)) * 100)) : 100;
       const emo = (window.petSettings && window.petSettings.emotion) || '平静';
       box.innerHTML =
         '<div class="rel-line"><b>' + escapeHtml(r.stage || '初识后辈') + '</b>' +
         (hideNum ? '' : '（亲密 ' + r.intimacy + '）') +
         ' · 连续陪伴 ' + (r.consecutiveDays || 0) + ' 天 · 此刻心情：' + escapeHtml(emo) + '</div>' +
         '<div class="rel-bar"><div class="rel-fill" style="width:' + bar + '%"></div></div>' +
-        '<div class="rel-hint">亲密值只由日常陪伴积累：每日见面、连续陪伴、重要日子、用心聊天</div>';
+        '<div class="rel-hint">亲密规则：每日见面+1 · 用心聊天（满2轮+1，每天最多3次）· 重要日期+5（每年一次）· 连续陪伴 7/30/100/365 天各领一次(+3/+5/+10/+20)</div>';
     }).catch(() => {});
   }
 

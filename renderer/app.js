@@ -377,18 +377,33 @@
   function closeChat() {
     el.chatbar.classList.add('hidden');
   }
+  // 有效聊天计数：至少 2 轮有效对话 +1 亲密度；重复内容/空白/1.5秒内连发不计入
+  let chatRounds = 0;
+  let lastChatMsg = '';
+  let lastChatTs = 0;
   async function sendChat() {
     const text = el.chatInput.value.trim();
     if (!text) return;
     el.chatInput.value = '';
     chatHistory.push({ role: 'user', content: text });
+    const now = Date.now();
+    const isDup = text === lastChatMsg;
+    const isSpam = now - lastChatTs < 1500;
+    if (!isDup && !isSpam) {
+      chatRounds++;
+      lastChatMsg = text;
+      lastChatTs = now;
+    }
     showThinking();
     const res = await api.llmChat(chatHistory);
     if (res && res.ok && res.reply) {
       chatHistory.push({ role: 'assistant', content: res.reply });
       say(res.reply);
       setEmotion('happy', 10000);
-      api.addIntimacy('chat', 1).catch(() => {}); // 有意义的聊天 +1 亲密度（每日上限 3）
+      if (chatRounds >= 2) { // 满 2 轮有效对话 → +1（每日上限 3 由主进程控制）
+        chatRounds = 0;
+        api.addIntimacy('chat', 1).catch(() => {});
+      }
     } else {
       chatHistory.pop();
       say((res && res.error) ? '（AI 出错：' + res.error + '）' : '（AI 没理我…）');

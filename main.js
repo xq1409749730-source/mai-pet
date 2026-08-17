@@ -487,17 +487,21 @@ ipcMain.handle('clear-memory', (_e, section) => {
 // ---------- 亲密度与关系阶段（本地规则，AI 无权修改） ----------
 const INTIMACY_STAGES = [
   { min: 0, name: '初识后辈' },
-  { min: 50, name: '熟悉的后辈' },
-  { min: 150, name: '值得关心的后辈' },
-  { min: 300, name: '特别的后辈' },
-  { min: 500, name: '重要之人' },
+  { min: 15, name: '熟悉的后辈' },
+  { min: 50, name: '值得关心的后辈' },
+  { min: 120, name: '特别的后辈' },
+  { min: 250, name: '重要之人' },
 ];
 const INTIMACY_DAILY_CAPS = { chat: 3, response: 2 }; // 每类每日亲密度上限（防刷）
-const CONSECUTIVE_MILESTONES = [7, 30, 100, 365];
+const CONSECUTIVE_MILESTONES = { 7: 3, 30: 5, 100: 10, 365: 20 }; // 天: 奖励，每个里程碑仅一次
 const intimacyToday = {}; // category -> 今日已加次数（进程内，重启重置；阶段8加固为持久化）
 
 function defaultRelationship() {
-  return { schemaVersion: 1, intimacy: 0, consecutiveDays: 0, lastSeenDate: '', updatedAt: 0 };
+  return {
+    schemaVersion: 1, intimacy: 0, consecutiveDays: 0, lastSeenDate: '', updatedAt: 0,
+    claimedMilestones: [],       // 已领取的连续陪伴里程碑（仅一次）
+    importantDateClaims: {},     // 重要日期 -> 最近领取年份（每年一次）
+  };
 }
 function readRelationship() {
   return Object.assign(defaultRelationship(), readMemory('relationship') || {});
@@ -526,7 +530,7 @@ function todayIsImportantDate() {
   return null;
 }
 
-// 每日仪式：签到(+1)、重要日期(+5)、连续陪伴里程碑(+5)、阶段变化 → 写记忆
+// 每日仪式：签到(+1)、重要日期(+5 每年一次)、连续陪伴里程碑(每个仅一次)、阶段变化 → 写记忆
 ipcMain.handle('daily-ritual', () => {
   try {
     const r = readRelationship();
@@ -541,21 +545,37 @@ ipcMain.handle('daily-ritual', () => {
     r.consecutiveDays = (r.lastSeenDate === yKey) ? (r.consecutiveDays || 0) + 1 : 1;
 
     r.intimacy += 1; result.bonus += 1; // 每日签到
+
+    // 重要日期：每个日期每年只奖励一次
     const imp = todayIsImportantDate();
     if (imp) {
-      r.intimacy += 5; result.bonus += 5; result.events.push('重要日子：' + imp);
-      const m = readMemory('milestones') || { schemaVersion: 1, entries: [] };
-      if (!m.entries.some(e => e.title === imp)) {
-        m.entries.push({ ts: Date.now(), title: imp, note: '和麻衣一起度过的特别日子' });
+      const claims = r.importantDateClaims || {};
+      const year = new Date().getFullYear();
+      if (claims[imp] !== year) {
+        claims[imp] = year;
+        r.importantDateClaims = claims;
+        r.intimacy += 5; result.bonus += 5; result.events.push('重要日子：' + imp);
+        const m = readMemory('milestones') || { schemaVersion: 1, entries: [] };
+        if (!m.entries.some(e => e.title === imp)) {
+          m.entries.push({ ts: Date.now(), title: imp, note: '和麻衣一起度过的特别日子' });
+          writeMemory('milestones', m);
+        }
+      }
+    }
+
+    // 连续陪伴里程碑：每个里程碑仅领取一次（7:+3 30:+5 100:+10 365:+20）
+    const claimed = r.claimedMilestones || [];
+    for (const [days, bonus] of Object.entries(CONSECUTIVE_MILESTONES)) {
+      if (r.consecutiveDays === +days && !claimed.includes(+days)) {
+        claimed.push(+days);
+        r.claimedMilestones = claimed;
+        r.intimacy += bonus; result.bonus += bonus; result.events.push('连续陪伴 ' + days + ' 天');
+        const m = readMemory('milestones') || { schemaVersion: 1, entries: [] };
+        m.entries.push({ ts: Date.now(), title: '连续陪伴 ' + days + ' 天', note: '风雨无阻，麻衣都记着' });
         writeMemory('milestones', m);
       }
     }
-    if (CONSECUTIVE_MILESTONES.includes(r.consecutiveDays)) {
-      r.intimacy += 5; result.bonus += 5; result.events.push('连续陪伴 ' + r.consecutiveDays + ' 天');
-      const m = readMemory('milestones') || { schemaVersion: 1, entries: [] };
-      m.entries.push({ ts: Date.now(), title: '连续陪伴 ' + r.consecutiveDays + ' 天', note: '风雨无阻，麻衣都记着' });
-      writeMemory('milestones', m);
-    }
+
     r.lastSeenDate = today;
     r.updatedAt = Date.now();
     writeMemory('relationship', r);
@@ -598,7 +618,13 @@ ipcMain.handle('add-intimacy', (_e, category, amount) => {
 
 ipcMain.handle('get-relationship', () => {
   const r = readRelationship();
-  return { ok: true, intimacy: r.intimacy, stage: stageOf(r.intimacy).name, consecutiveDays: r.consecutiveDays, lastSeenDate: r.lastSeenDate };
+  const cur = stageOf(r.intimacy);
+  const idx = INTIMACY_STAGES.indexOf(cur);
+  const next = INTIMACY_STAGES[idx + 1] || null;
+  return {
+    ok: true, intimacy: r.intimacy, stage: cur.name, consecutiveDays: r.consecutiveDays,
+    lastSeenDate: r.lastSeenDate, stageMin: cur.min, nextStageMin: next ? next.min : null,
+  };
 });
 
 // ---------- AI 调用预算与记忆上下文 ----------
