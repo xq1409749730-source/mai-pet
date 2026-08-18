@@ -337,14 +337,28 @@
     }, gap);
   }
 
-  // ---------- 随机台词 ----------
+  // ---------- 随机台词（本地库 + 去重历史：主进程 pickLocal 过滤相似/角度） ----------
   function randomOf(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
   function speakRandom(category, expr) {
-    const arr = PHRASES[category];
-    if (!arr || !arr.length) return;
-    if (expr) setExpression(expr);
-    say(randomOf(arr));
+    const scene = String(category || 'other');
+    const sayLocal = (text) => {
+      if (!text) return;
+      if (expr) setExpression(expr);
+      say(text);
+      api.recordLine({ text, scene, kind: 'local' }).catch(() => {});
+    };
+    // 本地台词去重：主进程根据最近 30 条本地历史过滤（相似/同角度），冷启动返回 null 时随机取
+    api.pickLocal(scene).then(res => {
+      if (res && res.ok && res.line) sayLocal(res.line);
+      else {
+        const arr = PHRASES[scene];
+        if (arr && arr.length) sayLocal(randomOf(arr));
+      }
+    }).catch(() => {
+      const arr = PHRASES[scene];
+      if (arr && arr.length) sayLocal(randomOf(arr));
+    });
   }
 
   // 防重复：同一类台词的最小间隔
@@ -386,13 +400,14 @@
     aiPending = true;
     showThinking();
     try {
-      const res = await api.llmSay(contextPrompt + aiContext());
+      const res = await api.llmSay(contextPrompt + aiContext(), fallbackCategory || 'other');
       if (res && res.ok && res.reply) {
         // 思考图至少展示 1.2 秒，再切换为说话（递便签）
         const wait = Math.max(0, 1200 - (Date.now() - thinkAt));
         setTimeout(() => {
           if (expr) setExpression(expr);
           say(res.reply);
+          // 注意：AI 台词已由主进程 llm-say 统一记录（避免双重记录）
           if (imageState) {
             flashState(imageState, 6000); // 特殊状态图（如喝水→捧杯子）
           } else if (Math.random() < 0.4) {
@@ -400,6 +415,10 @@
             flashState(Math.random() < 0.6 ? 'laugh' : 'happy', 2600);
           }
         }, wait);
+      } else if (res && res.retryFailed) {
+        // 与历史重复且重试仍重复 → 回退本地台词（未进入冷却的）
+        speakRandom(fallbackCategory, expr);
+        if (imageState) flashState(imageState, 6000);
       } else {
         speakRandom(fallbackCategory, expr);
         if (imageState) flashState(imageState, 6000);
@@ -451,12 +470,18 @@
       // 思考图至少展示 1.2 秒再说话
       setTimeout(() => {
         say(res.reply);
+        // 注意：AI 台词已由主进程 llm-chat 统一记录（避免双重记录）
         applyEmotionEvent('chat'); // 用心聊天 → 开心/信任
         if (chatRounds >= 2) { // 满 2 轮有效对话 → +1（每日上限 3 由主进程控制）
           chatRounds = 0;
           api.addIntimacy('chat', 1).catch(() => {});
         }
       }, Math.max(0, 1200 - (Date.now() - thinkAt)));
+    } else if (res && res.retryFailed) {
+      // 与历史重复且重试仍重复 → 回退本地台词
+      chatHistory.pop();
+      say(res.fallback || '（……）');
+      if (res.fallback) api.recordLine({ text: res.fallback, scene: 'chat', kind: 'local' }).catch(() => {});
     } else {
       chatHistory.pop();
       say((res && res.error) ? '（AI 出错：' + res.error + '）' : '（AI 没理我…）');
@@ -834,6 +859,9 @@
     api.setOnTop(settings.onTop);
     sysLoop();
     scheduleIdleAction(); // 定期随机小动作，让形象经常切换
+
+    // 台词去重：把本地台词库注册给主进程（pickLocal 过滤相似/角度）
+    api.registerPhrases(PHRASES).catch(() => {});
 
     // 记忆：首次见面纪念册（仅一次）
     api.getMemory().then(m => {

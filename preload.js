@@ -19,8 +19,13 @@ contextBridge.exposeInMainWorld('petApi', {
   onMenuAction: (cb) => { ipcRenderer.on('menu-action', (_e, data) => cb(data)); },
   // AI 对话（大模型）
   llmChat: (messages) => ipcRenderer.invoke('llm-chat', messages),
-  llmSay: (prompt) => ipcRenderer.invoke('llm-say', prompt),
+  llmSay: (prompt, scene) => ipcRenderer.invoke('llm-say', prompt, scene),
   getLlmConfig: () => ipcRenderer.invoke('get-llm-config'),
+  // 台词去重与多样性
+  registerPhrases: (phrases) => ipcRenderer.invoke('register-phrases', phrases),
+  pickLocal: (scene) => ipcRenderer.invoke('pick-local', scene),
+  recordLine: (entry) => ipcRenderer.invoke('record-line', entry),
+  getRecentLines: () => ipcRenderer.invoke('get-recent-lines'),
   // 桌面快捷方式 & 开机自启
   toggleAutoStart: () => ipcRenderer.invoke('toggle-autostart'),
   createDesktopShortcut: () => ipcRenderer.invoke('create-desktop-shortcut'),

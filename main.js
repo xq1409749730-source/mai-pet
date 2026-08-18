@@ -315,7 +315,22 @@ ipcMain.handle('llm-chat', async (_e, messages) => {
   if (!spendAi('chat')) return { ok: false, error: '今日 AI 聊天预算已用完（100 次），明天再聊吧' };
   try {
     const history = Array.isArray(messages) ? messages.slice(-10) : [];
-    const reply = await llmCall([{ role: 'system', content: buildSystemPrompt() }, ...history], 220);
+    const dedupe = antiRepeatContext('chat');
+    const reply = await llmCall([{ role: 'system', content: buildSystemPrompt() }, { role: 'user', content: dedupe }, ...history], 220);
+    // 生成后相似度检测：同场景重复 → 重试一次（独立预算 retry）
+    if (isDuplicateInScene(reply, 'chat')) {
+      const r2 = await retryLlm([{ role: 'system', content: buildSystemPrompt() }, { role: 'user', content: dedupe + '\n【重试】上一条生成的内容与历史重复了，请用完全不同的说法重新回答。' }, ...history], 220, 'chat');
+      if (r2) {
+        recordLine({ text: r2, scene: 'chat', mood: (readEmotion() || {}).mood || 'calm', kind: 'ai' });
+        logDebug('llm-chat OK len=' + r2.length + ' (retried)');
+        return { ok: true, reply: r2 };
+      }
+      // 重试仍重复 → 回退本地台词
+      const local = pickLocalLine('chat');
+      logDebug('llm-chat DEDUP-FALLBACK');
+      return { ok: false, retryFailed: true, fallback: local || null, error: '与历史台词重复，已回退本地台词' };
+    }
+    recordLine({ text: reply, scene: 'chat', mood: (readEmotion() || {}).mood || 'calm', kind: 'ai' });
     logDebug('llm-chat OK len=' + reply.length);
     return { ok: true, reply };
   } catch (err) {
@@ -324,13 +339,43 @@ ipcMain.handle('llm-chat', async (_e, messages) => {
   }
 });
 
-ipcMain.handle('llm-say', async (_e, prompt) => {
-  if (!spendAi('say')) return { ok: false, error: '今日 AI 自动说话预算已用完（40 次）' };
+// 去重重试：独立每日上限，与 say/chat 预算互不影响
+async function retryLlm(messages, maxTokens, scene) {
   try {
+    if (!spendAi('retry')) return null; // 重试预算用完 → 不再重试（走回退）
+    return await llmCall(messages, maxTokens);
+  } catch (e) {
+    logDebug('llm retry ERR: ' + ((e && e.message) || String(e)));
+    return null;
+  }
+}
+
+ipcMain.handle('llm-say', async (_e, prompt, scene) => {
+  if (!spendAi('say')) return { ok: false, error: '今日 AI 自动说话预算已用完（40 次）' };
+  const s = String(scene || 'other');
+  try {
+    const dedupe = antiRepeatContext(s);
     const reply = await llmCall([
       { role: 'system', content: buildSystemPrompt() },
-      { role: 'user', content: String(prompt || '随便说点什么').slice(0, 300) },
+      { role: 'user', content: String(prompt || '随便说点什么').slice(0, 300) + '\n' + dedupe },
     ], 120);
+    // 生成后相似度检测：同场景重复 → 重试一次
+    if (isDuplicateInScene(reply, s)) {
+      const r2 = await retryLlm([
+        { role: 'system', content: buildSystemPrompt() },
+        { role: 'user', content: String(prompt || '随便说点什么').slice(0, 300) + '\n' + dedupe + '\n【重试】上一条生成的内容与历史重复了，请用完全不同的说法。' },
+      ], 120, s);
+      if (r2) {
+        recordLine({ text: r2, scene: s, mood: (readEmotion() || {}).mood || 'calm', kind: 'ai' });
+        logDebug('llm-say OK len=' + r2.length + ' (retried)');
+        return { ok: true, reply: r2 };
+      }
+      // 重试仍重复（或重试预算用完）→ 回退本地台词
+      const local = pickLocalLine(s);
+      logDebug('llm-say DEDUP-FALLBACK scene=' + s);
+      return { ok: false, retryFailed: true, fallback: local || null, error: '与历史台词重复，已回退本地台词' };
+    }
+    recordLine({ text: reply, scene: s, mood: (readEmotion() || {}).mood || 'calm', kind: 'ai' });
     logDebug('llm-say OK len=' + reply.length);
     return { ok: true, reply };
   } catch (err) {
@@ -797,14 +842,14 @@ function dueFollowups() {
 }
 
 // ---------- AI 调用预算与记忆上下文 ----------
-const AI_DAILY_LIMIT = { say: 40, chat: 100 };
+const AI_DAILY_LIMIT = { say: 40, chat: 100, retry: 20 }; // retry: 去重重试独立计数
 function aiUsageFile() { return path.join(dataDir, 'memory', 'ai-usage.json'); }
 function readAiUsage() {
   try {
     const u = JSON.parse(fs.readFileSync(aiUsageFile(), 'utf8'));
     if (u && u.date === todayKey()) return u;
   } catch (e) { /* 首次使用 */ }
-  return { date: todayKey(), say: 0, chat: 0 };
+  return { date: todayKey(), say: 0, chat: 0, retry: 0 };
 }
 function spendAi(kind) {
   const u = readAiUsage();
@@ -826,6 +871,248 @@ function memoryContext() {
   });
   return relLine + '\n【近期记忆摘要】\n' + lines.join('\n');
 }
+
+// ---------- 台词去重与多样性系统（recent-lines.json 原子写 + 损坏自愈） ----------
+const LINES_AI_MAX = 50;      // AI 台词历史上限
+const LINES_LOCAL_MAX = 30;   // 本地台词历史上限
+const LINES_SIM_THRESHOLD = 0.72; // 同场景相似度阈值，超过视为重复
+const LINES_ANGLES = ['tsundere', 'care', 'tease', 'command', 'complaint', 'shy', 'greet', 'other'];
+
+function linesFile() { return path.join(dataDir, 'memory', 'recent-lines.json'); }
+
+// 中文文本标准化：NFKC + 全角转半角 + 去标点/空白/颜文字 + 去常用虚词 + 小写
+function normalizeText(text) {
+  let s = String(text || '');
+  try { s = s.normalize('NFKC'); } catch (e) { /* 忽略 */ }
+  s = s.replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0)); // 全角→半角
+  s = s.replace(/[（(【［「『]|[）)】］」』]/g, ''); // 括号（保留内容）
+  s = s.replace(/[^\p{L}\p{N}]+/gu, ''); // 只留文字和数字
+  s = s.replace(/[的了么吗呢啊吧呀哦嗯哈都就在还这那很挺]/g, ''); // 常用虚词/衬字（提升同义改写检测）
+  return s.toLowerCase();
+}
+
+// 最长公共子序列比例（对插入/删减型改写敏感）
+function lcsRatio(a, b) {
+  const A = normalizeText(a), B = normalizeText(b);
+  if (!A || !B) return 0;
+  if (A === B) return 1;
+  const m = A.length, n = B.length;
+  let prev = new Array(n + 1).fill(0), cur = new Array(n + 1).fill(0);
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      cur[j] = A[i - 1] === B[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], cur[j - 1]);
+    }
+    const t = prev; prev = cur; cur = t; cur.fill(0);
+  }
+  return prev[n] / Math.min(m, n);
+}
+
+// 相似度：bigram Dice、字符 Jaccard、LCS 比例 三者取最大（覆盖换词/乱序/删减三类改写）
+function similarity(a, b) {
+  const na = normalizeText(a);
+  const nb = normalizeText(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  // bigram Dice
+  const grams = s => {
+    const g = new Map();
+    for (let i = 0; i < s.length - 1; i++) {
+      const k = s.slice(i, i + 2);
+      g.set(k, (g.get(k) || 0) + 1);
+    }
+    return g;
+  };
+  const ga = grams(na), gb = grams(nb);
+  let inter = 0, totalA = 0, totalB = 0;
+  ga.forEach((cnt, k) => { totalA += cnt; if (gb.has(k)) inter += Math.min(cnt, gb.get(k)); });
+  gb.forEach(cnt => { totalB += cnt; });
+  const dice = totalA + totalB === 0 ? 0 : (2 * inter) / (totalA + totalB);
+  // 字符 Jaccard（对语序调整更敏感）
+  const setA = new Set(na.split(''));
+  const setB = new Set(nb.split(''));
+  let uni = 0;
+  setA.forEach(c => { if (setB.has(c)) uni++; });
+  const jaccard = setA.size + setB.size === 0 ? 0 : uni / (setA.size + setB.size - uni);
+  return Math.max(dice, jaccard, lcsRatio(a, b));
+}
+
+// 表达角度分类：规则判定（不依赖调用方）
+function classifyAngle(text) {
+  const t = String(text || '');
+  if (/才不是|才没有|才不|不是.*在意|没.*等你|谁.*等|哼/.test(t)) return 'tsundere';
+  if (/脸红|害羞|别.*靠|靠.*近|盯着我|看.*什么/.test(t)) return 'shy';
+  if (/记得|别忘了|别忘|该|应该|快|去喝|去走|动一动|休息|保存|起来|关掉|别玩|别看/.test(t)) return 'command';
+  if (/关心|担心|心疼|不想你|希望你|加油|辛苦|努力|会陪|看着你|惦记/.test(t)) return 'care';
+  if (/好无聊|好傻|抗议|冒烟|累趴|告急|没品味|有品味|还不错|有点意思/.test(t)) return 'tease';
+  if (/干嘛|别戳|别拎|放我下来|失礼|轻点|弄乱|不理你|够了|烦/.test(t)) return 'complaint';
+  if (/早上好|早安|中午|午休|晚安|晚上好|天黑了|起床|报时|整点/.test(t)) return 'greet';
+  return 'other';
+}
+
+// 读台词历史（损坏时自动恢复：坏文件改名备份 → 重建空结构）
+function readLines() {
+  const fallback = { schemaVersion: 1, entries: [] };
+  try {
+    const raw = fs.readFileSync(linesFile(), 'utf8');
+    const d = JSON.parse(raw);
+    if (!d || !Array.isArray(d.entries)) return fallback;
+    return d;
+  } catch (e) {
+    // 损坏：改名备份后重建
+    try {
+      if (fs.existsSync(linesFile())) {
+        fs.renameSync(linesFile(), linesFile() + '.bak-' + Date.now());
+        logDebug('recent-lines 损坏已备份重建');
+      }
+    } catch (e2) { /* 忽略 */ }
+    return fallback;
+  }
+}
+
+// 原子写入：tmp + rename
+function writeLines(d) {
+  fs.mkdirSync(path.join(dataDir, 'memory'), { recursive: true });
+  const file = linesFile();
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(d, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+// 记录一条台词（kind: 'ai' 或 'local'，各自独立上限裁剪）
+function recordLine(entry) {
+  try {
+    const d = readLines();
+    const kind = entry.kind === 'local' ? 'local' : 'ai';
+    const max = kind === 'local' ? LINES_LOCAL_MAX : LINES_AI_MAX;
+    const e = {
+      text: String(entry.text || '').trim(),
+      scene: String(entry.scene || 'other').trim(),
+      mood: String(entry.mood || 'calm').trim(),
+      angle: classifyAngle(entry.text),
+      ts: Date.now(),
+      kind,
+    };
+    if (!e.text) return null;
+    d.entries.push(e);
+    // 各自裁剪：保留 kind 的前 max 条（时间升序，丢最旧）
+    const byKind = d.entries.filter(x => x.kind === kind);
+    const otherKind = d.entries.filter(x => x.kind !== kind);
+    while (byKind.length > max) byKind.shift();
+    d.entries = [...otherKind, ...byKind].sort((a, b) => a.ts - b.ts);
+    writeLines(d);
+    logDebug('line record: ' + kind + ' scene=' + e.scene + ' angle=' + e.angle);
+    return e;
+  } catch (e) { return null; }
+}
+
+// 同场景最近台词（时间倒序，最多 12 条、至少返回已有全部）
+function recentForScene(scene, max) {
+  const d = readLines();
+  return d.entries
+    .filter(x => x.scene === scene)
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, max || 12);
+}
+
+// 同场景最近一条（用于角度轮换）
+function lastLineForScene(scene) {
+  const list = recentForScene(scene, 1);
+  return list.length ? list[0] : null;
+}
+
+// 检测某文本与同场景历史是否重复（相似度 > 阈值 或 完全相同）
+function isDuplicateInScene(text, scene, excludeTs) {
+  const n = normalizeText(text);
+  if (!n) return false;
+  const hist = readLines().entries.filter(x => x.scene === scene && x.ts !== excludeTs);
+  return hist.some(x => {
+    const s = similarity(text, x.text);
+    return s > LINES_SIM_THRESHOLD;
+  });
+}
+
+// 高频用语统计：历史中「后辈/哼/才不是/笨蛋」等出现次数（近 24 小时）
+function highFreqWords() {
+  const cut = Date.now() - 24 * 3600 * 1000;
+  const texts = readLines().entries.filter(x => x.ts >= cut).map(x => x.text).join('\n');
+  const words = [
+    { w: '后辈', limit: 5 }, { w: '哼', limit: 2 }, { w: '才不是', limit: 1 },
+    { w: '才没有', limit: 1 }, { w: '笨蛋', limit: 1 }, { w: '嘛', limit: 2 },
+  ];
+  const hits = [];
+  for (const { w, limit } of words) {
+    const n = (texts.match(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+    if (n > limit) hits.push(w);
+  }
+  return hits;
+}
+
+// 生成前注入：同场景最近台词 + 角度轮换 + 高频词限制
+function antiRepeatContext(scene) {
+  const hist = recentForScene(scene, 12);
+  const lines = [];
+  if (hist.length) {
+    lines.push('【本场景最近出现过的台词（' + scene + '）——禁止复述或近义改写】：');
+    hist.slice(0, 12).forEach((h, i) => { lines.push((i + 1) + '. ' + h.text); });
+  }
+  const last = lastLineForScene(scene);
+  if (last && last.angle !== 'other') {
+    lines.push('【表达角度】上一次这个场景用了「' + last.angle + '」角度，这次请换一种完全不同的表达角度。');
+  }
+  const hf = highFreqWords();
+  if (hf.length) {
+    lines.push('【高频词限制】近期已频繁使用：' + hf.join('、') + '。本条请尽量避免这些词（「后辈」可用「你」代替）。');
+  }
+  lines.push('【要求】内容不要与上面任何一条历史台词相似（包括近义改写）。');
+  return lines.join('\n');
+}
+
+// 选择本地台词：滑动窗口冷却(最近4条) + 历史相似过滤 + 角度轮换
+const LOCAL_COOLDOWN_WINDOW = 4; // 同一场景最近 N 条进入冷却（不重复）
+function pickLocalLine(scene) {
+  try {
+    const phrases = LOCAL_PHRASES[scene] || [];
+    if (!phrases.length) return null;
+    const hist = readLines().entries
+      .filter(x => x.kind === 'local' && x.scene === scene)
+      .sort((a, b) => b.ts - a.ts); // 新→旧
+    const last = hist.length ? hist[0] : null;
+    // 候选：不在冷却窗口内、与历史不相似、且与上一条角度不同
+    let pool = phrases.filter(p => {
+      const inCooldown = hist.slice(0, LOCAL_COOLDOWN_WINDOW).some(h => h.text === p);
+      if (inCooldown) return false;
+      if (hist.some(h => similarity(p, h.text) > LINES_SIM_THRESHOLD)) return false;
+      if (last && classifyAngle(p) === last.angle && classifyAngle(p) !== 'other') return false;
+      return true;
+    });
+    if (!pool.length) {
+      // 全冷却 → 放宽：只排除冷却窗口内的（保证有话说，且优先换新台词）
+      pool = phrases.filter(p => !hist.slice(0, LOCAL_COOLDOWN_WINDOW).some(h => h.text === p));
+    }
+    if (!pool.length) pool = phrases.slice();
+    return pool[Math.floor(Math.random() * pool.length)];
+  } catch (e) { return null; }
+}
+
+// 本地台词库（渲染端启动时注册）
+let LOCAL_PHRASES = {};
+ipcMain.handle('register-phrases', (_e, phrases) => {
+  try {
+    LOCAL_PHRASES = (phrases && typeof phrases === 'object') ? phrases : {};
+    return { ok: true };
+  } catch (err) { return { ok: false, error: String(err) }; }
+});
+ipcMain.handle('pick-local', (_e, scene) => {
+  const line = pickLocalLine(String(scene || 'other'));
+  return { ok: !!line, line };
+});
+ipcMain.handle('record-line', (_e, entry) => {
+  const e = recordLine(entry);
+  return { ok: !!e, line: e };
+});
+ipcMain.handle('get-recent-lines', () => {
+  try { return { ok: true, data: readLines() }; } catch (e) { return { ok: false, error: String(e) }; }
+});
 
 // ---------- 右键菜单（系统原生菜单，小窗口也不会被裁剪） ----------
 function sendAction(action, payload) {
