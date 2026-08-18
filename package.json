@@ -1,8 +1,8 @@
 {
   "name": "mai-pet",
   "productName": "麻衣桌宠",
-  "version": "2.1.0",
-  "description": "樱岛麻衣 2.0 关系与记忆版桌宠（高冷傲娇学姐，叫你后辈）｜含情感引擎与台词去重",
+  "version": "2.2.0",
+  "description": "樱岛麻衣 2.0 关系与记忆版桌宠（高冷傲娇学姐，叫你后辈）｜含情感引擎/台词去重/状态机",
   "main": "main.js",
   "private": true,
   "author": "后辈",

@@ -1114,6 +1114,106 @@ ipcMain.handle('get-recent-lines', () => {
   try { return { ok: true, data: readLines() }; } catch (e) { return { ok: false, error: String(e) }; }
 });
 
+// ---------- 状态机配置（state-config.json：概率/时长/优先级/冷却/困倦时段，可手改+菜单重载） ----------
+function stateConfigFile() { return path.join(dataDir, 'state-config.json'); }
+
+function defaultStateConfig() {
+  return {
+    schemaVersion: 1,
+    states: {
+      default:   { keyword: '抱着书',    duration: 0,     priority: 10 },
+      speaking:  { keyword: '递便签',    duration: 10000, priority: 20 },
+      sleepy:    { keyword: '困倦',      duration: 0,     priority: 30 },
+      wave:      { keyword: '挥手',      duration: [2000, 3000], cooldown: 30, priority: 35 },
+      shy:       { keyword: '害羞',      duration: [2500, 4000], cooldown: 30, priority: 40 },
+      laugh:     { keyword: '偷笑',      duration: [2000, 3000], cooldown: 20, priority: 45 },
+      cup:       { keyword: '捧杯子',    duration: [4000, 6000], priority: 55 },
+      remind:    { keyword: '提醒',      duration: 4000,  priority: 60 },
+      happy:     { keyword: '庆祝',      duration: [3000, 5000], cooldown: 20, priority: 70 },
+      angry:     { keyword: '有点生气',  duration: [4000, 7000], cooldown: 60, priority: 75 },
+      thinking:  { keyword: '思考',      minDuration: 1200, priority: 90 },
+      dragging:  { keyword: '盯着',      duration: 0,     priority: 100 },
+    },
+    click: {
+      shy: 30, happy: 20, laugh: 20, speak: 15, angry: 5, calm: 10, // 害羞/庆祝/偷笑/递便签并说话/有点生气/保持默认说短句
+    },
+    hover: {
+      shy: 40, laugh: 35, wave: 25,
+      holdMs: 1200, cooldownSec: 60,
+    },
+    drag: {
+      dropAngryChance: 0.35, // 放下时 35% 有点生气
+      angryAfterDrags: 3,    // 频繁拖拽 3 次后必定有点生气
+    },
+    sleep: {
+      nap:      { enabled: true, start: '12:30', end: '14:00' },
+      lateNight:{ enabled: true, start: '23:30', end: '06:30' },
+      idle:     { enabled: true, idleSeconds: 300 },
+    },
+    pose: {
+      maxRepeat: 2,        // 同一非默认形象连续出现最多 2 次
+      preferGap: 2,        // 随机姿势出现后，接下来 2 次优先其他姿势
+      wavePerHour: 1,      // 挥手每个时段(小时)主动最多 1 次
+      happyClickRate: 20,  // 庆祝普通点击概率 20%（与 click.happy 同步）
+    },
+  };
+}
+
+function readStateConfig() {
+  const def = defaultStateConfig();
+  try {
+    const raw = fs.readFileSync(stateConfigFile(), 'utf8');
+    const d = JSON.parse(raw);
+    if (!d || typeof d !== 'object') return def;
+    // 浅合并：states 按 key 合并（兼容旧配置缺字段）
+    const out = Object.assign({}, def, d);
+    out.states = Object.assign({}, def.states, (d.states || {}));
+    out.click = Object.assign({}, def.click, (d.click || {}));
+    out.hover = Object.assign({}, def.hover, (d.hover || {}));
+    out.drag = Object.assign({}, def.drag, (d.drag || {}));
+    out.sleep = Object.assign({}, def.sleep, (d.sleep || {}));
+    out.pose = Object.assign({}, def.pose, (d.pose || {}));
+    return out;
+  } catch (e) { return def; }
+}
+
+function writeStateConfig(cfg) {
+  fs.mkdirSync(dataDir, { recursive: true });
+  const file = stateConfigFile();
+  const tmp = file + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+ipcMain.handle('get-state-config', () => {
+  try {
+    const cfg = readStateConfig();
+    if (!fs.existsSync(stateConfigFile())) { // 首次：落盘默认配置便于用户手改
+      try { writeStateConfig(cfg); } catch (e) { /* 忽略 */ }
+    }
+    return { ok: true, config: cfg };
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+ipcMain.handle('save-state-config', (_e, cfg) => {
+  try {
+    const cur = readStateConfig();
+    const next = Object.assign({}, cur, cfg || {});
+    next.states = Object.assign({}, cur.states, (cfg && cfg.states) || {});
+    next.sleep = Object.assign({}, cur.sleep, (cfg && cfg.sleep) || {});
+    writeStateConfig(next);
+    logDebug('state-config saved');
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+ipcMain.handle('reload-state-config', () => {
+  try {
+    const cfg = readStateConfig();
+    if (win && !win.isDestroyed()) win.webContents.send('state-config-reloaded', cfg);
+    logDebug('state-config reloaded');
+    return { ok: true, config: cfg };
+  } catch (e) { return { ok: false, error: String(e) }; }
+});
+
 // ---------- 右键菜单（系统原生菜单，小窗口也不会被裁剪） ----------
 function sendAction(action, payload) {
   logDebug('menu-action: ' + action + (payload === undefined ? '' : ' ' + JSON.stringify(payload)));
@@ -1138,6 +1238,13 @@ ipcMain.handle('show-context-menu', (_e, state) => {
     relIntimacy: (state && typeof state.relIntimacy === 'number') ? state.relIntimacy : 0,
     showIntimacy: !!(state && state.showIntimacy),
     images: Array.isArray(state && state.images) ? state.images : [],
+    sleepCfg: (state && state.sleepCfg) || {},
+  };
+  const sleepCfg = s.sleepCfg;
+  const sleepFlags = {
+    nap: !!(sleepCfg && sleepCfg.nap && sleepCfg.nap.enabled),
+    late: !!(sleepCfg && sleepCfg.lateNight && sleepCfg.lateNight.enabled),
+    idle: !!(sleepCfg && sleepCfg.idle && sleepCfg.idle.enabled),
   };
   const template = [
     {
@@ -1146,6 +1253,17 @@ ipcMain.handle('show-context-menu', (_e, state) => {
         { label: '久坐提醒', type: 'checkbox', checked: !!s.reminders.sit, click: () => sendAction('toggle-reminder', 'sit') },
         { label: '喝水提醒', type: 'checkbox', checked: !!s.reminders.water, click: () => sendAction('toggle-reminder', 'water') },
         { label: '休息提醒', type: 'checkbox', checked: !!s.reminders.rest, click: () => sendAction('toggle-reminder', 'rest') },
+      ],
+    },
+    {
+      label: '困倦',
+      submenu: [
+        { label: '午觉时段困倦（12:30~14:00）', type: 'checkbox', checked: sleepFlags.nap, click: () => sendAction('toggle-sleep', 'nap') },
+        { label: '深夜时段困倦（23:30~06:30）', type: 'checkbox', checked: sleepFlags.late, click: () => sendAction('toggle-sleep', 'late') },
+        { label: '空闲困倦（5 分钟无操作）', type: 'checkbox', checked: sleepFlags.idle, click: () => sendAction('toggle-sleep', 'idle') },
+        { type: 'separator' },
+        { label: '设置困倦时间段', click: () => sendAction('open-memory', 'sleep') },
+        { label: '重载状态配置', click: () => sendAction('reload-state-config') },
       ],
     },
     {

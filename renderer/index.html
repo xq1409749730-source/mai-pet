@@ -169,6 +169,18 @@
         <input id="mem-milestone-note" placeholder="备注（可选）" />
         <button id="mem-add-milestone">添加纪念册条目</button>
         <button id="mem-clear-milestones" class="mem-danger">清空纪念册</button>
+
+        <h4>困倦设置（时间段困倦 + 空闲困倦）</h4>
+        <label class="mem-check"><input type="checkbox" id="mem-sleep-nap" /> 午觉时段困倦</label>
+        <label class="mem-check"><input type="checkbox" id="mem-sleep-late" /> 深夜时段困倦</label>
+        <label class="mem-check"><input type="checkbox" id="mem-sleep-idle" /> 空闲困倦（无操作超时）</label>
+        <div class="mem-sleep-times">
+          <span>午觉：</span><input id="mem-nap-start" class="mem-time" maxlength="5" placeholder="12:30" /> ~ <input id="mem-nap-end" class="mem-time" maxlength="5" placeholder="14:00" />
+        </div>
+        <div class="mem-sleep-times">
+          <span>深夜：</span><input id="mem-late-start" class="mem-time" maxlength="5" placeholder="23:30" /> ~ <input id="mem-late-end" class="mem-time" maxlength="5" placeholder="06:30" />（可跨天）
+        </div>
+        <button id="mem-save-sleep">保存困倦设置</button>
       </div>
     </div>
   </div>

@@ -57,7 +57,8 @@
   }
 
   // ---------- 持久情感引擎（主进程 emotion.json；情绪对应形象与动作） ----------
-  const MOOD_IMAGE = { calm: 'book', happy: 'happy', shy: 'click', concerned: 'remind', upset: 'angry', lonely: 'book', tired: 'sleepy', expectant: 'wave', relieved: 'book' };
+  // 情绪 → 状态图（状态名与 state-config 一致：default/happy/shy/remind/angry/sleepy/wave）
+  const MOOD_IMAGE = { calm: 'default', happy: 'happy', shy: 'shy', concerned: 'remind', upset: 'angry', lonely: 'default', tired: 'sleepy', expectant: 'wave', relieved: 'default' };
   const MOOD_NAME = { calm: '平静', happy: '开心', shy: '害羞', concerned: '担心', upset: '小生气', lonely: '失落', tired: '困倦', expectant: '期待', relieved: '安心' };
   let persistentEmotion = { mood: 'calm', happiness: 55, energy: 60, trust: 40, reason: '' };
   async function refreshEmotion() {
@@ -74,7 +75,8 @@
         const prev = persistentEmotion.mood;
         persistentEmotion = { mood: r.mood, happiness: r.happiness, energy: r.energy, trust: r.trust, reason: r.reason };
         if (r.mood !== 'calm' && r.mood !== prev) {
-          flashState(MOOD_IMAGE[r.mood] || 'book', 6000); // 情绪对应形象（担心→提醒 等）
+          const img = MOOD_IMAGE[r.mood];
+          if (img && img !== 'default') flashState(img, 6000); // 情绪对应形象（担心→提醒 等）
         }
       }
       return r;
@@ -179,20 +181,20 @@
 
   // ---------- 气泡 ----------
   let bubbleTimer = null;
+  let aiPending = false;   // 提前声明（say/aiSay 均引用）
+  let dragging = false;    // 提前声明（say 里判断拖拽中不切说话状态）
   function say(text, duration) {
     el.bubbleText.textContent = text;
     el.bubble.classList.add('visible');
-    // 说话不强制「递便签」：保留当前形象（思考/害羞/挥手等都算说话）
-    // 只有从默认形象说话时，才随机挑一个说话姿势增加变化
-    if (currentCharState === 'base') {
-      const pool = ['speak', 'think', 'laugh', 'wave', 'book'];
-      applyCharState(pool[Math.floor(Math.random() * pool.length)]);
+    // 说话：进入「递便签」状态（事件状态，跟随气泡）；若当前有更高优先级状态（拖拽/思考）则不打断
+    if (!dragging && !aiPending) {
+      const cur = stateStack.find(s => s.id === 'dragging' || s.id === 'thinking');
+      if (!cur) enterState('speaking', { type: 'event' });
     }
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
       el.bubble.classList.remove('visible');
-      if (sleepyMode) applyCharState('sleepy');
-      else applyBaseImage();
+      endState('speaking'); // 气泡消失 → 结束说话状态，自然恢复前一状态/基础状态
     }, duration || 5200);
   }
 
@@ -201,7 +203,6 @@
   let imageListCache = [];
   let llmConfigured = false;
   let llmModel = '';
-  let aiPending = false;
   let lastAiSay = 0;
   const chatHistory = [];
   async function applyUserImage() {
@@ -214,9 +215,9 @@
         return;
       }
       buildStateImages();
-      // 基础形象：用户选的 → 「抱着书」→ 第一张
+      // 基础形象：用户选的 → 「抱着书(default)」→ 第一张
       baseImageUrl = imageListCache.find(f => f.name === settings.imageName)?.url
-        || stateImageUrls.book
+        || stateImageUrls.default
         || imageListCache[0].url;
       currentCharState = 'base';
       setCharImage(baseImageUrl, true);
@@ -241,25 +242,70 @@
     }
   }
 
+  // ---------- 状态机配置（主进程 state-config.json；概率/时长/优先级/冷却可手改+菜单重载） ----------
+  let stateConfig = null; // 未加载时用内置默认（下方 DEFAULT_CONFIG）
+  const DEFAULT_CONFIG = {
+    schemaVersion: 1,
+    states: {
+      default:   { keyword: '抱着书',    duration: 0,     priority: 10 },
+      speaking:  { keyword: '递便签',    duration: 10000, priority: 20 },
+      sleepy:    { keyword: '困倦',      duration: 0,     priority: 30 },
+      wave:      { keyword: '挥手',      duration: [2000, 3000], cooldown: 30, priority: 35 },
+      shy:       { keyword: '害羞',      duration: [2500, 4000], cooldown: 30, priority: 40 },
+      laugh:     { keyword: '偷笑',      duration: [2000, 3000], cooldown: 20, priority: 45 },
+      cup:       { keyword: '捧杯子',    duration: [4000, 6000], priority: 55 },
+      remind:    { keyword: '提醒',      duration: 4000,  priority: 60 },
+      happy:     { keyword: '庆祝',      duration: [3000, 5000], cooldown: 20, priority: 70 },
+      angry:     { keyword: '有点生气',  duration: [4000, 7000], cooldown: 60, priority: 75 },
+      thinking:  { keyword: '思考',      minDuration: 1200, priority: 90 },
+      dragging:  { keyword: '盯着',      duration: 0,     priority: 100 },
+    },
+    click: { shy: 30, happy: 20, laugh: 20, speak: 15, angry: 5, calm: 10 },
+    hover: { shy: 40, laugh: 35, wave: 25, holdMs: 1200, cooldownSec: 60 },
+    drag:  { dropAngryChance: 0.35, angryAfterDrags: 3 },
+    sleep: {
+      nap:       { enabled: true, start: '12:30', end: '14:00' },
+      lateNight: { enabled: true, start: '23:30', end: '06:30' },
+      idle:      { enabled: true, idleSeconds: 300 },
+    },
+    pose: { maxRepeat: 2, preferGap: 2, wavePerHour: 1, happyClickRate: 20 },
+  };
+  function cfg() { return stateConfig || DEFAULT_CONFIG; }
+  async function loadStateConfig() {
+    try {
+      const r = await api.getStateConfig();
+      if (r && r.ok && r.config) {
+        stateConfig = Object.assign({}, DEFAULT_CONFIG, r.config);
+        stateConfig.states = Object.assign({}, DEFAULT_CONFIG.states, (r.config.states || {}));
+        stateConfig.click = Object.assign({}, DEFAULT_CONFIG.click, (r.config.click || {}));
+        stateConfig.hover = Object.assign({}, DEFAULT_CONFIG.hover, (r.config.hover || {}));
+        stateConfig.drag = Object.assign({}, DEFAULT_CONFIG.drag, (r.config.drag || {}));
+        stateConfig.sleep = Object.assign({}, DEFAULT_CONFIG.sleep, (r.config.sleep || {}));
+        stateConfig.pose = Object.assign({}, DEFAULT_CONFIG.pose, (r.config.pose || {}));
+        buildStateImages(); // 关键词可能变了 → 重建映射
+      }
+    } catch (e) { /* 用默认 */ }
+  }
+  api.onStateConfigReloaded((c) => {
+    if (c) { stateConfig = Object.assign({}, DEFAULT_CONFIG, c); buildStateImages(); }
+  });
+
   // ---------- 互动图片自动切换（「形象」文件夹多张图按状态切换） ----------
-  const STATE_KEYWORDS = [
-    ['speak', '递便签'], ['think', '思考'], ['click', '害羞'], ['drag', '盯着'],
-    ['sleepy', '困倦'], ['wave', '挥手'], ['cup', '捧杯子'], ['happy', '庆祝'], ['book', '抱着书'],
-    ['laugh', '偷笑'], ['remind', '提醒'], ['angry', '有点生气'],
-  ];
+  // 状态关键词来自配置（states.*.keyword），可改文件名匹配规则
   const stateImageUrls = {};
   let baseImageUrl = null;
   let currentCharState = 'base';
-  let sleepyMode = false;
   let flashTimer = null;
   let idleActionTimer = null;
 
   function buildStateImages() {
     Object.keys(stateImageUrls).forEach(k => delete stateImageUrls[k]);
     if (!imageListCache.length) return;
+    const st = cfg().states;
     imageListCache.forEach(f => {
-      for (const [state, kw] of STATE_KEYWORDS) {
-        if (stateImageUrls[state] === undefined && f.name.includes(kw)) stateImageUrls[state] = f.url;
+      for (const state of Object.keys(st)) {
+        const kw = st[state] && st[state].keyword;
+        if (kw && stateImageUrls[state] === undefined && f.name.includes(kw)) stateImageUrls[state] = f.url;
       }
     });
   }
@@ -283,12 +329,99 @@
     el.svg.style.display = 'none';
   }
 
-  // 用户操作唤醒（从困倦回到基础形象）
-  function wake() {
-    if (sleepyMode) {
-      sleepyMode = false;
-      applyBaseImage();
+  // ---------- 状态栈（事件 vs 情绪分离 + 优先级仲裁 + 结束恢复前一状态） ----------
+  // 事件状态：dragging/thinking/speaking/remind/cup（高优先级、临时）
+  // 情绪状态：shy/laugh/wave/happy/angry（中优先级，来自点击/悬停/情绪事件）
+  // 基础状态：困倦(时段/空闲) → 情绪对应图 → 默认
+  let stateStack = []; // [{ id, type:'event'|'mood', endAt, ts }]
+  const stateTimers = {}; // id → timeout
+
+  function stateDuration(id, overrideMs) {
+    if (overrideMs != null && overrideMs > 0) return overrideMs;
+    const st = cfg().states[id];
+    if (!st) return 2600;
+    if (st.minDuration) return st.minDuration; // 思考：至少1.2s，直到AI返回
+    if (Array.isArray(st.duration) && st.duration.length === 2) {
+      return st.duration[0] + Math.random() * (st.duration[1] - st.duration[0]);
     }
+    return st.duration || 2600;
+  }
+  function statePriority(id) {
+    const st = cfg().states[id];
+    return st ? st.priority : 50;
+  }
+  function isEventState(id) {
+    return ['dragging', 'thinking', 'speaking', 'remind', 'cup'].includes(id);
+  }
+  function stateInCooldown(id) {
+    const st = cfg().states[id];
+    if (!st || !st.cooldown) return false;
+    const last = lastStateAt[id];
+    return !!last && (Date.now() - last) < st.cooldown * 1000;
+  }
+
+  const lastStateAt = {}; // id → ts（冷却用）
+  const recentPoses = []; // 最近出现过的非默认状态（重复姿势冷却）
+  let lastWaveHour = -1;
+
+  // 进入状态：推入栈 → 渲染最高优先级 → 设定时器
+  function enterState(id, opts) {
+    opts = opts || {};
+    const st = cfg().states[id];
+    if (!st) return;
+    // 重复姿势冷却：同一非默认状态连续出现超过 maxRepeat 次 → 忽略（高优先级事件除外）
+    if (opts.type === 'mood' && !opts.force) {
+      const max = cfg().pose.maxRepeat;
+      const cont = recentPoses.filter(p => p === id).length;
+      if (cont >= max && !isEventState(id)) return;
+    }
+    // 冷却检查（强制事件除外；连点生气走 force）
+    if (!opts.force && opts.type === 'mood' && stateInCooldown(id)) return;
+    const now = Date.now();
+    // 同 id 已在栈 → 续期并置顶
+    const exist = stateStack.find(s => s.id === id);
+    if (exist) {
+      exist.endAt = stateDuration(id, opts.duration) > 0 ? now + stateDuration(id, opts.duration) : 0;
+      exist.ts = now;
+    } else {
+      stateStack.push({ id, type: opts.type || 'mood', endAt: stateDuration(id, opts.duration) > 0 ? now + stateDuration(id, opts.duration) : 0, ts: now });
+    }
+    lastStateAt[id] = now;
+    recentPoses.push(id);
+    if (recentPoses.length > 12) recentPoses.shift();
+    renderBestState();
+    // 定时结束（duration 有限时）
+    if (stateTimers[id]) clearTimeout(stateTimers[id]);
+    const dur = stateDuration(id, opts.duration);
+    if (dur > 0) {
+      stateTimers[id] = setTimeout(() => { endState(id); }, dur);
+    }
+  }
+
+  // 结束状态：从栈移除 → 重新渲染（自然恢复栈中前一个仍有效的状态）
+  function endState(id) {
+    const i = stateStack.findIndex(s => s.id === id);
+    if (i >= 0) stateStack.splice(i, 1);
+    if (stateTimers[id]) { clearTimeout(stateTimers[id]); delete stateTimers[id]; }
+    renderBestState();
+  }
+
+  // 基础状态：困倦 → 情绪对应图 → 默认（抱住书）
+  function baseStateId() {
+    if (sleepSource) return 'sleepy';
+    const m = MOOD_IMAGE[persistentEmotion.mood];
+    if (m && m !== 'book') return m; // 情绪对应形象（开心→庆祝 等）
+    return 'default';
+  }
+
+  // 渲染栈中优先级最高且未过期的状态；无 → 基础状态
+  function renderBestState() {
+    const now = Date.now();
+    stateStack = stateStack.filter(s => s.endAt === 0 || s.endAt > now);
+    const sorted = [...stateStack].sort((a, b) => statePriority(b.id) - statePriority(a.id) || b.ts - a.ts);
+    const best = sorted[0];
+    if (best) applyCharState(best.id);
+    else applyCharState(baseStateId());
   }
 
   function applyCharState(state) {
@@ -306,20 +439,65 @@
     }
   }
 
-  // 临时切换到某个状态图，ms 后回到基础形象（若期间被其他状态接管则不打断）
+  // 旧状态名 → 新状态名（兼容历史代码传参）
+  const LEGACY_STATE_MAP = { click: 'shy', drag: 'dragging', think: 'thinking', speak: 'speaking', book: 'default', worried: 'remind', sleep: 'sleepy' };
+  // 临时闪一个状态（兼容旧调用；type 自动按状态名判定）
   function flashState(state, ms) {
-    applyCharState(state);
-    if (flashTimer) clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => {
-      if (currentCharState === state) {
-        if (sleepyMode) applyCharState('sleepy');
-        else applyBaseImage();
-      }
-    }, ms || 2600);
+    state = LEGACY_STATE_MAP[state] || state;
+    const type = isEventState(state) ? 'event' : 'mood';
+    enterState(state, { duration: ms, type });
+  }
+
+  // ---------- 困倦（三源：午觉/深夜/空闲；可独立开关+改时间） ----------
+  let sleepSource = null; // 'nap' | 'late' | 'idle' | null
+  function timeToMin(s) {
+    const m = String(s || '').match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    return (+m[1]) * 60 + (+m[2]);
+  }
+  function inTimeRange(min, start, end) {
+    const s = timeToMin(start), e = timeToMin(end);
+    if (s === null || e === null) return false;
+    if (s <= e) return min >= s && min < e;   // 不跨天
+    return min >= s || min < e;               // 跨天（如 23:30~06:30）
+  }
+  function evalSleepSource() {
+    const sl = cfg().sleep;
+    const d = new Date();
+    const min = d.getHours() * 60 + d.getMinutes();
+    if (sl.nap.enabled && inTimeRange(min, sl.nap.start, sl.nap.end)) return 'nap';
+    if (sl.lateNight.enabled && inTimeRange(min, sl.lateNight.start, sl.lateNight.end)) return 'late';
+    if (sl.idle.enabled && lastIdleSeconds >= sl.idle.idleSeconds) return 'idle';
+    return null;
+  }
+  // 时段变化检查（每分钟）
+  function checkSleepSchedule() {
+    const next = evalSleepSource();
+    if (next !== sleepSource) {
+      sleepSource = next;
+      renderBestState(); // 进入/离开困倦 → 刷新基础状态
+    }
+  }
+
+  // 用户操作唤醒：只解除「空闲困倦」，午觉/深夜时段困倦保持
+  function wake() {
+    if (sleepSource === 'idle') {
+      sleepSource = null;
+      applyBaseImage();
+    }
   }
 
   // 定期随机小动作：让形象经常切换（间隔按三档模式；安静/勿扰时不做）
-  const IDLE_ACTION_POOL = ['wave', 'think', 'cup', 'happy', 'laugh', 'remind', 'angry', 'book'];
+  // 随机小动作池（情绪型小动作；重复姿势冷却：最近出现的 2 个优先避开）
+  const IDLE_ACTION_POOL = ['wave', 'laugh', 'happy', 'shy', 'remind', 'cup', 'angry'];
+  function pickIdleAction() {
+    const gap = cfg().pose.preferGap;
+    const recent = recentPoses.slice(-gap); // 最近 gap 个出现过的
+    let pool = IDLE_ACTION_POOL.filter(p => !recent.includes(p) && !stateInCooldown(p));
+    if (!pool.length) pool = IDLE_ACTION_POOL.filter(p => !stateInCooldown(p));
+    if (!pool.length) pool = IDLE_ACTION_POOL;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
   function scheduleIdleAction() {
     if (idleActionTimer) clearTimeout(idleActionTimer);
     const act = activity();
@@ -329,9 +507,9 @@
     }
     const gap = act.idleMin + Math.random() * (act.idleMax - act.idleMin);
     idleActionTimer = setTimeout(() => {
-      if (!dragging && !aiPending && !sleepyMode && !dndActive() && currentCharState === 'base') {
-        const pick = IDLE_ACTION_POOL[Math.floor(Math.random() * IDLE_ACTION_POOL.length)];
-        if (pick !== 'book') flashState(pick, 3200);
+      if (!dragging && !aiPending && !sleepSource && !dndActive() && stateStack.length === 0 && currentCharState === baseStateId()) {
+        const pick = pickIdleAction();
+        if (pick !== 'default') flashState(pick, 3200);
       }
       scheduleIdleAction();
     }, gap);
@@ -376,12 +554,11 @@
     el.bubbleText.textContent = '……';
     el.bubble.classList.add('visible');
     thinkAt = Date.now();
-    applyCharState('think'); // 思考中切换到「思考」
+    enterState('thinking', { type: 'event' }); // 思考中切换到「思考」（事件状态，优先级高于情绪）
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
       el.bubble.classList.remove('visible');
-      if (sleepyMode) applyCharState('sleepy');
-      else applyBaseImage();
+      endState('thinking');
     }, 15000);
   }
 
@@ -402,9 +579,10 @@
     try {
       const res = await api.llmSay(contextPrompt + aiContext(), fallbackCategory || 'other');
       if (res && res.ok && res.reply) {
-        // 思考图至少展示 1.2 秒，再切换为说话（递便签）
+        // 思考图至少展示 1.2 秒（思考状态在 showThinking 时进入），再切换为说话
         const wait = Math.max(0, 1200 - (Date.now() - thinkAt));
         setTimeout(() => {
+          endState('thinking'); // AI 返回 → 思考结束（恢复前一状态或基础状态）
           if (expr) setExpression(expr);
           say(res.reply);
           // 注意：AI 台词已由主进程 llm-say 统一记录（避免双重记录）
@@ -417,13 +595,16 @@
         }, wait);
       } else if (res && res.retryFailed) {
         // 与历史重复且重试仍重复 → 回退本地台词（未进入冷却的）
+        endState('thinking');
         speakRandom(fallbackCategory, expr);
         if (imageState) flashState(imageState, 6000);
       } else {
+        endState('thinking');
         speakRandom(fallbackCategory, expr);
         if (imageState) flashState(imageState, 6000);
       }
     } catch (e) {
+      endState('thinking');
       speakRandom(fallbackCategory, expr);
       if (imageState) flashState(imageState, 6000);
     } finally {
@@ -493,7 +674,6 @@
   });
 
   // ---------- 点击 / 拖拽 ----------
-  let dragging = false;
   let dragVisualized = false; // 拖拽视觉只设置一次，避免 move 高频闪烁
   let moved = 0;
   let dragStart = null;
@@ -517,27 +697,39 @@
         dragVisualized = true;
         el.root.classList.add('dragged');
         setExpression('surprised');
-        applyCharState('drag'); // 被拎起来 →「盯着」
-        if (Math.random() < 0.35) flashState('angry', 2500); // 偶尔被拎起来会有点生气
+        enterState('dragging', { type: 'event' }); // 拖拽中始终「盯着」（最高优先级，覆盖思考/情绪）
       }
       api.moveTo(dragStart.wx + dx, dragStart.wy + dy);
     }
   }
 
+  // ---------- 拖拽（拖拽中始终「盯着」；放下时按概率/连拖次数生气） ----------
+  let dragCount = 0; // 连续拖拽计数（频繁拖拽 → 必定生气）
   function onPointerUp(e) {
     if (!dragging) return;
     dragging = false;
     el.root.classList.remove('dragged');
     if (moved > 6) {
+      endState('dragging'); // 拖拽结束 → 结束「盯着」（恢复前一状态：如 AI 思考还在则回思考）
       applyEmotionEvent('drag'); // 拖拽结束触发一次（避免 move 高频写盘）
+      const dcfg = cfg().drag;
+      dragCount++;
+      const angryChance = (dragCount >= (dcfg.angryAfterDrags || 3)) ? 1 : (dcfg.dropAngryChance || 0.35);
+      if (Math.random() < angryChance) {
+        // 放下时生气（情绪状态，force 绕过冷却：连拖规则优先）
+        setExpression('pout');
+        enterState('angry', { type: 'mood', force: true, duration: null });
+        setEmotion('upset', 6000);
+      } else {
+        dragCount = 0; // 没生气 → 重置连拖计数
+      }
       speakRandom('drop', 'pout');
-      applyBaseImage(); // 放下后回到基础形象
     } else {
       clickReact();
     }
   }
 
-  // 连点检测：1.2 秒内连点 3 次 → 她真的生气了
+  // 连点检测：1.2 秒内连点 3 次 → 必定「有点生气」（不随机）
   let clickStamp = 0;
   let clickBurst = 0;
   function clickReact() {
@@ -548,7 +740,7 @@
     if (clickBurst >= 3) {
       clickBurst = 0;
       setExpression('pout');
-      flashState('angry', 2600);   // 有点生气
+      enterState('angry', { type: 'mood', force: true, duration: null }); // 连点必生气（绕过冷却）
       setEmotion('upset', 6000);
       speakRandom('angry');
       el.root.classList.remove('hop');
@@ -556,13 +748,24 @@
       el.root.classList.add('hop');
       return;
     }
-    const r = Math.random();
+    // 点击概率表（来自配置 cfg().click）：害羞/庆祝/偷笑/递便签说话/有点生气/保持默认说短句
+    const c = cfg().click;
+    const r = Math.random() * 100;
+    let acc = 0, pick = 'calm';
+    const order = [['shy', c.shy], ['happy', c.happy], ['laugh', c.laugh], ['speak', c.speak], ['angry', c.angry], ['calm', c.calm]];
+    for (const [k, p] of order) {
+      acc += (p || 0);
+      if (r < acc) { pick = k; break; }
+    }
     let expr;
-    // 多种点击反应，切换更多：庆祝 / 害羞 / 有点生气 / 偷笑
-    if (r < 0.30) { expr = 'happy'; flashState('happy', 2200); setEmotion('happy', 8000); }
-    else if (r < 0.62) { expr = 'blush'; flashState('click', 2200); setEmotion('shy', 8000); }
-    else if (r < 0.84) { expr = 'pout'; flashState('angry', 2200); setEmotion('upset', 5000); }
-    else { expr = 'normal'; flashState('laugh', 2200); setEmotion('happy', 6000); }
+    switch (pick) {
+      case 'shy':   expr = 'blush'; enterState('shy', { type: 'mood', force: true }); setEmotion('shy', 8000); break;
+      case 'happy': expr = 'happy'; enterState('happy', { type: 'mood', force: true }); setEmotion('happy', 8000); break;
+      case 'laugh': expr = 'normal'; enterState('laugh', { type: 'mood', force: true }); setEmotion('happy', 6000); break;
+      case 'speak': expr = 'normal'; speakRandom('click'); break; // 递便签并说话（say 内部进入 speaking 状态）
+      case 'angry': expr = 'pout'; enterState('angry', { type: 'mood', force: true }); setEmotion('upset', 5000); break;
+      default:      expr = 'normal'; speakRandom('click'); break; // 保持默认并播放本地短句
+    }
     setExpression(expr);
     // 先让点击反应图展示约 1 秒，再进入 AI 思考/说话（否则点击图一闪而过）
     setTimeout(() => aiSay('后辈用手指戳了你一下，请用傲娇又可爱的语气回应他。', 'click'), 1000);
@@ -572,23 +775,48 @@
     el.root.classList.add('hop');
   }
 
-  // 鼠标悬停交互：鼠标靠近/碰到她就有反应（冷却较短，响应更灵敏）
-  let lastHover = 0;
-  function hoverReact() {
+  // ---------- 鼠标悬停（停留满 holdMs 才触发；60s 冷却；移出重进才再次触发） ----------
+  let hoverInside = false;   // 鼠标是否在窗口内
+  let hoverEnteredAt = 0;    // 进入时间
+  let hoverTimer = null;     // 停留判定计时器
+  let lastHoverAt = 0;       // 上次触发时间（冷却）
+  function hoverEnter() {
+    if (dragging) return;
+    hoverInside = true;
+    hoverEnteredAt = Date.now();
+    const hold = (cfg().hover.holdMs) || 1200;
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      if (!hoverInside) return; // 已移出 → 不触发
+      const now = Date.now();
+      const cd = ((cfg().hover.cooldownSec) || 60) * 1000;
+      if (now - lastHoverAt < cd) return; // 冷却中
+      lastHoverAt = now;
+      hoverReact(now - hoverEnteredAt >= hold);
+    }, hold);
+  }
+  function hoverLeave() {
+    hoverInside = false;
+    if (hoverTimer) clearTimeout(hoverTimer);
+  }
+  function hoverReact(heldLongEnough) {
     if (dragging || aiPending) return;
-    const now = Date.now();
-    if (now - lastHover < 2200) return;
-    lastHover = now;
-    wake(); // 鼠标靠近也把她唤醒
-    const r = Math.random();
-    if (r < 0.4) flashState('click', 1800);       // 害羞
-    else if (r < 0.7) flashState('laugh', 1800);  // 偷笑
-    else flashState('wave', 1800);                // 挥手
+    wake(); // 鼠标靠近也把她唤醒（只解除空闲困倦）
+    // 概率表（来自配置 cfg().hover）：害羞40/偷笑35/挥手25
+    const h = cfg().hover;
+    const r = Math.random() * 100;
+    let state = 'wave';
+    let acc = 0;
+    const order = [['shy', h.shy], ['laugh', h.laugh], ['wave', h.wave]];
+    for (const [k, p] of order) {
+      acc += (p || 0);
+      if (r < acc) { state = k; break; }
+    }
+    enterState(state, { type: 'mood' });
     // 说话概率按三档模式；勿扰时不说话（延迟 0.7s，先让悬停反应图展示）
     if (!dndActive() && Math.random() < activity().speakChance) {
       setTimeout(() => speakRandom('hover'), 700);
     }
-    if (Math.random() < 0.3) setEmotion('shy', 6000); // 被盯着看偶尔害羞
   }
 
   // 点击/拖拽/右键只响应在人物本体上（气泡区空白处不响应、不占位置）
@@ -617,6 +845,7 @@
       relIntimacy: relState.intimacy,
       showIntimacy: settings.showIntimacy,
       images: imageListCache,
+      sleepCfg: stateConfig ? stateConfig.sleep : null,
     });
   }
 
@@ -625,8 +854,9 @@
   el.userImage.addEventListener('pointerdown', onPointerDown);
   el.svg.addEventListener('contextmenu', onContextMenu);
   el.userImage.addEventListener('contextmenu', onContextMenu);
-  // 悬停交互：监听整个窗口区域（鼠标一靠近就有反应，更灵敏）
-  el.layer.addEventListener('mouseenter', hoverReact);
+  // 悬停交互：监听整个窗口区域（停留满 1.2s 触发一次；移出后重新进入可再次触发）
+  el.layer.addEventListener('mouseenter', hoverEnter);
+  el.layer.addEventListener('mouseleave', hoverLeave);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
 
@@ -711,7 +941,30 @@
         }
         break;
       case 'open-memory':
-        if (window.Memory) window.Memory.open();
+        if (window.Memory) window.Memory.open(payload === 'sleep' ? 'sleep' : undefined);
+        break;
+      case 'toggle-sleep':
+        // 困倦三源开关（nap/late/idle）→ 更新配置并立即生效
+        if (stateConfig) {
+          const key = payload === 'nap' ? 'nap' : payload === 'late' ? 'lateNight' : 'idle';
+          stateConfig.sleep[key].enabled = !stateConfig.sleep[key].enabled;
+          api.saveStateConfig({ sleep: { [key]: stateConfig.sleep[key] } }).then(() => {
+            checkSleepSchedule(); // 立即重算（如关闭午觉 → 退出困倦）
+            renderBestState();
+            say({ nap: '（午觉时段困倦已' + (stateConfig.sleep.nap.enabled ? '开启' : '关闭') + '）', late: '（深夜时段困倦已' + (stateConfig.sleep.lateNight.enabled ? '开启' : '关闭') + '）', idle: '（空闲困倦已' + (stateConfig.sleep.idle.enabled ? '开启' : '关闭') + '）' }[key]);
+          }).catch(() => {});
+        }
+        break;
+      case 'reload-state-config':
+        api.reloadStateConfig().then(res => {
+          if (res && res.ok && res.config) {
+            stateConfig = Object.assign({}, DEFAULT_CONFIG, res.config);
+            buildStateImages();
+            checkSleepSchedule();
+            renderBestState();
+            say('（状态配置已重新加载）');
+          }
+        }).catch(() => {});
         break;
       case 'toggle-show-intimacy':
         settings.showIntimacy = !settings.showIntimacy;
@@ -725,7 +978,11 @@
   function timeGreeting() {
     if (dndActive()) return; // 勿扰：跳过问候
     const h = hourOf();
-    flashState('wave', 4000); // 问候时→挥手
+    // 挥手：每个时段（小时）主动最多 1 次（pose.wavePerHour）
+    if (lastWaveHour !== h && (cfg().pose.wavePerHour || 1) > 0) {
+      lastWaveHour = h;
+      enterState('wave', { type: 'mood', force: true }); // 问候时→挥手
+    }
     if (h >= 5 && h < 11) speakRandom('morning', 'happy');
     else if (h >= 11 && h < 14) speakRandom('noon', 'normal');
     else if (h >= 14 && h < 18) speakRandom('evening', 'normal');
@@ -734,6 +991,8 @@
 
   let lastHour = -1;
   function timeLoop() {
+    // 困倦时段检查（午觉/深夜；跨天正确处理）
+    checkSleepSchedule();
     // 勿扰刚到期：提醒一下（用「提醒」形象）
     if (settings.dndUntil > 0 && !dndActive()) {
       settings.dndUntil = 0;
@@ -785,19 +1044,27 @@
   }
 
   let lastCat = null;
+  let lastIdleSeconds = 0; // 最近一次空闲秒数（困倦评估用）
   async function fgLoop() {
     try {
       const fg = await api.foregroundApp();
       if (!fg) return;
+      lastIdleSeconds = fg.idleSeconds || 0;
 
-      // 空闲检测
-      if (fg.idleSeconds >= 300) { // 5 分钟无操作
-        sleepyMode = true;
-        applyCharState('sleepy'); // 困倦→困倦图
-        setEmotion('tired', 600000);
-        applyEmotionEvent('idle');
-        aiSay('后辈已经很久没动电脑了，你困倦地打了个哈欠，对他说点什么。', 'idle', 'sleepy');
+      // 空闲困倦：达到阈值进入（可开关；时间段困倦由 checkSleepSchedule 独立管理）
+      if (lastIdleSeconds >= (cfg().sleep.idle.idleSeconds || 300)) {
+        if (cfg().sleep.idle.enabled && sleepSource !== 'idle') {
+          sleepSource = 'idle';
+          renderBestState(); // 困倦图
+          setEmotion('tired', 600000);
+          applyEmotionEvent('idle');
+          aiSay('后辈已经很久没动电脑了，你困倦地打了个哈欠，对他说点什么。', 'idle', 'sleepy');
+        }
         return;
+      }
+      if (sleepSource === 'idle') {
+        sleepSource = null; // 恢复操作 → 解除空闲困倦（时段困倦不受影响）
+        renderBestState();
       }
 
       // 连续活动累计：60 分钟 → 担心
@@ -844,6 +1111,10 @@
     applyOutfit(settings.outfit);
     setExpression('pout');
     scheduleBlink();
+    loadStateConfig().then(() => {
+      checkSleepSchedule(); // 配置加载后立即评估困倦时段
+      renderBestState();
+    });
     applyUserImage();
     api.onCharacterUpdated(() => applyUserImage());
     api.getLlmConfig().then(c => {

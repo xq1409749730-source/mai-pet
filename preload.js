@@ -26,6 +26,11 @@ contextBridge.exposeInMainWorld('petApi', {
   pickLocal: (scene) => ipcRenderer.invoke('pick-local', scene),
   recordLine: (entry) => ipcRenderer.invoke('record-line', entry),
   getRecentLines: () => ipcRenderer.invoke('get-recent-lines'),
+  // 状态机配置（概率/时长/优先级/困倦时段）
+  getStateConfig: () => ipcRenderer.invoke('get-state-config'),
+  saveStateConfig: (cfg) => ipcRenderer.invoke('save-state-config', cfg),
+  reloadStateConfig: () => ipcRenderer.invoke('reload-state-config'),
+  onStateConfigReloaded: (cb) => { ipcRenderer.on('state-config-reloaded', (_e, cfg) => cb(cfg)); },
   // 桌面快捷方式 & 开机自启
   toggleAutoStart: () => ipcRenderer.invoke('toggle-autostart'),
   createDesktopShortcut: () => ipcRenderer.invoke('create-desktop-shortcut'),

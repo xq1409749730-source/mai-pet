@@ -297,3 +297,9 @@ html, body {
   transition: width 0.6s ease;
 }
 .rel-hint { font-size: 11px; color: #b89292; line-height: 1.5; }
+
+/* 困倦设置面板 */
+.mem-check { display: flex; align-items: center; gap: 6px; margin: 5px 0; font-size: 13px; color: #6a4a4a; cursor: pointer; }
+.mem-check input { width: auto; margin: 0; }
+.mem-sleep-times { display: flex; align-items: center; gap: 4px; margin: 5px 0; font-size: 13px; color: #7a6262; }
+.mem-time { width: 64px !important; text-align: center; }

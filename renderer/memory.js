@@ -18,7 +18,36 @@
       renderRecent();
       renderMilestones();
       renderRelationship();
+      loadSleepSettings();
     } catch (e) { /* ignore */ }
+  }
+
+  // ---------- 困倦设置（state-config.json 的 sleep 部分） ----------
+  async function loadSleepSettings() {
+    try {
+      const r = await api.getStateConfig();
+      const sl = (r && r.ok && r.config && r.config.sleep) || {};
+      $('mem-sleep-nap').checked = !!(sl.nap && sl.nap.enabled);
+      $('mem-sleep-late').checked = !!(sl.lateNight && sl.lateNight.enabled);
+      $('mem-sleep-idle').checked = !!(sl.idle && sl.idle.enabled);
+      $('mem-nap-start').value = (sl.nap && sl.nap.start) || '12:30';
+      $('mem-nap-end').value = (sl.nap && sl.nap.end) || '14:00';
+      $('mem-late-start').value = (sl.lateNight && sl.lateNight.start) || '23:30';
+      $('mem-late-end').value = (sl.lateNight && sl.lateNight.end) || '06:30';
+    } catch (e) { /* ignore */ }
+  }
+
+  async function saveSleepSettings() {
+    const val = id => String($(id).value || '').trim();
+    const sleep = {
+      nap:       { enabled: $('mem-sleep-nap').checked, start: val('mem-nap-start'), end: val('mem-nap-end') },
+      lateNight: { enabled: $('mem-sleep-late').checked, start: val('mem-late-start'), end: val('mem-late-end') },
+      idle:      { enabled: $('mem-sleep-idle').checked, idleSeconds: 300 },
+    };
+    const res = await api.saveStateConfig({ sleep });
+    // 通知主进程状态窗口实时应用（通过 reload 事件）
+    if (res && res.ok) api.reloadStateConfig().catch(() => {});
+    loadSleepSettings();
   }
 
   function renderRelationship() {
@@ -122,9 +151,17 @@
   $('mem-clear-recent').onclick = async () => { await api.clearMemory('recent'); load(); };
   $('mem-clear-milestones').onclick = async () => { await api.clearMemory('milestones'); load(); };
   $('mem-add-milestone').onclick = addMilestone;
+  $('mem-save-sleep').onclick = saveSleepSettings;
 
   window.Memory = {
-    open: () => { $('memory-window').classList.remove('hidden'); load(); },
+    open: (section) => {
+      $('memory-window').classList.remove('hidden');
+      load();
+      if (section === 'sleep') {
+        const panel = $('mem-sleep-nap');
+        if (panel && panel.scrollIntoView) panel.closest('h4').scrollIntoView({ block: 'center' });
+      }
+    },
     close: () => { $('memory-window').classList.add('hidden'); },
     load,
   };
