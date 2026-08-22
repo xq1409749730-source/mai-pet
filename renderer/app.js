@@ -186,6 +186,7 @@
   function say(text, duration) {
     el.bubbleText.textContent = text;
     el.bubble.classList.add('visible');
+    setWindowExpanded(true); // 气泡出现 → 窗口展开
     // 说话：进入「递便签」状态（事件状态，跟随气泡）；若当前有更高优先级状态（拖拽/思考）则不打断
     if (!dragging && !aiPending) {
       const cur = stateStack.find(s => s.id === 'dragging' || s.id === 'thinking');
@@ -194,6 +195,7 @@
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
       el.bubble.classList.remove('visible');
+      setWindowExpanded(false); // 气泡消失 → 窗口收缩回人物
       endState('speaking'); // 气泡消失 → 结束说话状态，自然恢复前一状态/基础状态
     }, duration || 5200);
   }
@@ -233,13 +235,47 @@
     setTimeout(fitWindowToImage, 600);
   }
 
-  // 让窗口贴合图片大小（右侧放人物，左侧留出气泡区）
+  // 窗口贴合图片：无气泡时紧凑（只包住人物），有气泡时展开（左侧留气泡区）
+  let lastImgW = 0, lastImgH = 0;
+  let windowExpanded = false; // 气泡/聊天框是否可见 → 窗口展开
   function fitWindowToImage() {
     if (el.userImage.style.display !== 'block') return;
     const r = el.userImage.getBoundingClientRect();
     if (r.width > 0 && r.height > 0) {
-      api.resizeTo(Math.ceil(r.width) + 170, Math.ceil(r.height) + 30);
+      lastImgW = Math.ceil(r.width);
+      lastImgH = Math.ceil(r.height);
+      applyWindowFit();
     }
+  }
+  // 无气泡：图片 + 少量呼吸/阴影边距（约 16px 右、8px 下，参考 #character-layer padding）
+  function compactWindowSize() {
+    return { w: Math.max(110, lastImgW + 20), h: Math.max(150, lastImgH + 12) };
+  }
+  // 有气泡：人物 + 左侧气泡区（气泡 max-width 140 + 箭头 + 边距 ≈ 170 宽；上方高度 30）
+  function expandedWindowSize() {
+    return { w: Math.max(110, lastImgW + 170), h: Math.max(150, lastImgH + 30) };
+  }
+  let windowFitTimer = null;
+  function applyWindowFit() {
+    if (!lastImgW || !lastImgH) return;
+    const s = windowExpanded ? expandedWindowSize() : compactWindowSize();
+    if (windowFitTimer) clearTimeout(windowFitTimer);
+    windowFitTimer = setTimeout(() => api.resizeTo(s.w, s.h), 40); // 等气泡淡入/淡出后再贴合
+  }
+  // 综合判断是否需要展开窗口（气泡或聊天框可见）
+  function updateWindowExpanded() {
+    const bubbleVisible = el.bubble.classList.contains('visible');
+    const chatVisible = !el.chatbar.classList.contains('hidden');
+    const flag = bubbleVisible || chatVisible;
+    if (windowExpanded === flag) return;
+    windowExpanded = flag;
+    applyWindowFit();
+  }
+  // 气泡/聊天框显示 → 展开窗口；消失 → 收缩回人物
+  function setWindowExpanded(flag) {
+    // 只标记气泡状态，实际展开与否由 updateWindowExpanded 综合判断（聊天框仍开时不收缩）
+    void flag;
+    updateWindowExpanded();
   }
 
   // ---------- 状态机配置（主进程 state-config.json；概率/时长/优先级/冷却可手改+菜单重载） ----------
@@ -553,11 +589,13 @@
   function showThinking() {
     el.bubbleText.textContent = '……';
     el.bubble.classList.add('visible');
+    setWindowExpanded(true); // 思考气泡出现 → 窗口展开
     thinkAt = Date.now();
     enterState('thinking', { type: 'event' }); // 思考中切换到「思考」（事件状态，优先级高于情绪）
     if (bubbleTimer) clearTimeout(bubbleTimer);
     bubbleTimer = setTimeout(() => {
       el.bubble.classList.remove('visible');
+      setWindowExpanded(false); // 思考超时 → 收缩
       endState('thinking');
     }, 15000);
   }
@@ -616,9 +654,11 @@
   function openChat() {
     el.chatbar.classList.remove('hidden');
     el.chatInput.focus();
+    setWindowExpanded(true); // 聊天框出现 → 窗口展开
   }
   function closeChat() {
     el.chatbar.classList.add('hidden');
+    setWindowExpanded(false); // 聊天框关闭 → 收缩回人物
   }
   // 有效聊天计数：至少 2 轮有效对话 +1 亲密度；重复内容/空白/1.5秒内连发不计入
   let chatRounds = 0;
