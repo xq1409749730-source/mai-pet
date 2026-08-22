@@ -217,7 +217,7 @@ ipcMain.handle('move-to', (_e, x, y) => {
   if (win && Number.isInteger(x) && Number.isInteger(y)) win.setPosition(x, y);
 });
 
-// 让窗口贴合形象图片大小（底部中心保持不动，且不出屏幕）
+// 让窗口贴合形象图片大小（人物在窗口右下角 → 锚定右边缘+底边，人物位置不动，只在左侧增减气泡区）
 ipcMain.handle('resize-to', (_e, w, h) => {
   if (!win) return;
   const minW = 110, minH = 150;
@@ -225,7 +225,7 @@ ipcMain.handle('resize-to', (_e, w, h) => {
   h = Math.max(minH, Math.round(h));
   const [x, y] = win.getPosition();
   const [cw, ch] = win.getSize();
-  let newX = x + (cw - w) / 2;
+  let newX = x + cw - w; // 右边缘不动（人物在右，不左右飘）
   let newY = y + ch - h; // 底部保持不动，脚脚不飘
   [newX, newY] = clampToScreen(newX, newY, w, h);
   win.setBounds({ x: newX, y: newY, width: w, height: h });
